@@ -11,7 +11,6 @@
     "input_path": "Выберите видеофайл...",
     "output_path": "Куда сохранить результат...",
     "tab_video": "Видео",
-    "tab_audio": "Аудио",
     "tab_audio_settings": "Аудио настройки",
     "tab_audio_extract": "Аудио извлечение",
     "tab_logs": "Логи",

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+/config.json
+/ffmpeg/
+/release/
+/build/
+/dist/
+*.spec
+ffmpeg.zip
+ffmpeg.zip.part

@@ -1,94 +1,132 @@
-# CineConvert (Alfa) - Professional Video Converter
+<div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
-![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green)
-![FFmpeg](https://img.shields.io/badge/Powered-FFmpeg-orange)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+![CINECONVERT](docs/banner.gif)
 
-A modern, user-friendly video conversion application with powerful batch processing capabilities. Built with Python and PyQt6, CineConvert makes video processing accessible to everyone.
+# 🎮 CINECONVERT
 
-## ✨ Features
+**Портативный видеоконвертер для Windows на движке FFmpeg**
 
-### 🎥 Video Conversion
-- **Multiple Formats**: Convert between MP4, MKV, MOV, AVI, FLV, WebM
-- **Quality Control**: Adjust resolution (4K to 144p), bitrate, and codec settings
-- **Codec Support**: H.264, H.265, VP9, AV1, and hardware-accelerated options
-- **Smart Scaling**: Maintain aspect ratio with intelligent padding
+*Вставь картридж • Нажми START • Конвертируй*
 
-### 🔊 Audio Processing
-- **Audio Extraction**: Extract audio to MP3, AAC, FLAC, WAV, OGG, AC3
-- **Audio Conversion**: Convert audio streams with customizable bitrate and channels
-- **Multi-track Support**: Handle multiple audio streams in single video
+![Windows](https://img.shields.io/badge/PLAYER%201-Windows%2010%2F11-3CBCFC?style=flat-square)
+![Python](https://img.shields.io/badge/ENGINE-Python%20%2B%20PyQt5-F8B800?style=flat-square)
+![FFmpeg](https://img.shields.io/badge/POWER--UP-FFmpeg-F83800?style=flat-square)
+![Portable](https://img.shields.io/badge/SAVE-Portable%2C%20no%20install-58D854?style=flat-square)
 
-### ⚡ Performance & Usability
-- **Batch Processing**: Convert multiple files simultaneously
-- **Real-time Progress**: Monitor conversion with detailed progress bars
-- **Auto FFmpeg Setup**: Automatic download and configuration of FFmpeg
-- **Media Information**: Detailed video/audio stream analysis
-- **Video Previews**: Generate thumbnails for quick preview
+</div>
 
-### 🌍 Internationalization
-- **Multi-language UI**: Support for English, Russian, and easily extensible
-- **Locale System**: JSON-based translation files for easy customization
-- **Portable Design**: Single executable with embedded resources
+---
 
-## 🚀 Quick Start
+```
+════════════════════════════ СЮЖЕТ ════════════════════════════
+```
 
-### Download
-1. Go to [Releases page](https://github.com/bboyJohnn/CineConvert/releases/download/video-converter/CineConvert.0.04alf.exe)
-2. Download the latest `CineConvert.exe`
-3. Run the executable - no installation required!
+**CineConvert** — конвертер видео, который работает **из коробки**: скачал, запустил, конвертируешь. Без установки, без реестра, без «скачайте ещё вот это». Все настройки хранятся в `config.json` рядом с программой — можно носить на флешке.
 
-### System Requirements
-- **Windows 10/11** (64-bit)
-- 4GB RAM minimum, 8GB recommended
-- 500MB free disk space
-- Internet connection for first-time FFmpeg setup
+Под капотом — **FFmpeg**, снаружи — аккуратный интерфейс с живой темой: выбираешь любой цвет радужным слайдером, и всё приложение перекрашивается на лету. Есть светлый и тёмный режимы.
 
-### First Run
-1. Launch `CineConvert.exe`
-2. Application will automatically download FFmpeg (one-time setup)
-3. Start converting videos immediately!
+<div align="center">
 
-## 🖥️ Interface Overview
+![Главный экран](docs/screen-main.png)
 
-The application features a tab-based interface:
+</div>
 
-- **Video Tab**: Main video conversion settings
-- **Audio Settings**: Audio stream configuration
-- **Audio Extraction**: Extract audio from videos
-- **Logs**: Real-time conversion progress
-- **Settings**: Preferences and language selection
+```
+═══════════════════════════ POWER-UPS ═══════════════════════════
+```
 
-## 📋 How to Use
+| | Возможность | Описание |
+|---|---|---|
+| 🎬 | **Конвертация видео** | Разрешение (4K→144p), кодек (x264, x265, NVENC, VP9, AV1), битрейт, контейнер (mp4, mkv, mov, avi, flv, webm) |
+| ⚡ | **Умный режим без потерь** | Если параметры не меняются — потоки **копируются 1:1** без перекодирования: mp4→mkv за секунду и без потери качества |
+| 🎧 | **Аудио при конвертации** | Кодек (aac, mp3, flac, opus, ac3), битрейт, каналы (моно/стерео/5.1/7.1) или «копировать как есть» |
+| 🎵 | **Извлечение аудио** | Вытащить звуковую дорожку в mp3, aac, flac, wav, ogg, ac3 |
+| 📦 | **Пакетная обработка** | Выбери несколько файлов (или перетащи) — сконвертируются по очереди |
+| 🔍 | **Информация о видео** | Превью-кадр + 12 характеристик сразу; кнопка «Подробнее» открывает полный разбор всех потоков; при мультивыборе файлы листаются кнопками ‹ › |
+| 🖥 | **Живая тема** | Любой цвет (OKLCH-слайдер + пипетка), насыщенность, светлая/тёмная/системная, анимированные волны в шапке |
+| 🌐 | **7 языков** | ru, en, de, es, fr, zh, ar — переводы в простых JSON, легко добавить свой |
+| 🔄 | **Обновление FFmpeg в 1 клик** | Настройки → FFmpeg: сверяет версию с последней сборкой gyan.dev и обновляет атомарно (с откатом при сбое) |
+| 💾 | **Всё сохраняется само** | Кнопки «Сохранить» нет — каждая настройка применяется и запоминается мгновенно, включая размер окна |
 
-### Basic Video Conversion
-1. Click **"Browse"** to select input video file
-2. Choose output destination
-3. Adjust video settings (resolution, codec, bitrate)
-4. Click **"Start Video Render"**
-5. Monitor progress in real-time
+```
+═══════════════════════════ УПРАВЛЕНИЕ ═══════════════════════════
+```
 
-### Batch Processing
-1. Click **"Select Multiple Videos"**
-2. Choose multiple files for conversion
-3. Configure output settings once
-4. All files process automatically with progress tracking
+1. **📂 Выбери видео** — кнопка «Обзор…» (можно несколько) или перетащи файлы в окно
+2. **⚙ Настрой** — вкладка «Видео»: разрешение / кодек / битрейт / формат + аудио-параметры ниже. Оставь «Без изменений» — получишь мгновенный remux без потерь
+3. **▶ Жми «Рендер»** — программа спросит, куда сохранить (папка по умолчанию настраивается), покажет прогресс, скорость и оставшееся время
+4. **🏁 Готово** — уведомление со звуком, кнопки «Открыть файл» / «Открыть папку»
 
-### Audio Extraction
-1. Load a video file
-2. Switch to **"Audio Extraction"** tab
-3. Choose output format (MP3, AAC, FLAC, etc.)
-4. Click **"Extract Audio"**
+Извлечение звука — вкладка **«Аудио»**: формат → «Извлечь аудио».
 
-## 🎯 Supported Formats
+```
+══════════════════════════ SELECT LEVEL ══════════════════════════
+                     (какой файл скачивать)
+```
 
-| Category | Formats |
-|----------|---------|
-| **Video Input** | MP4, MKV, MOV, AVI, FLV, WebM |
-| **Video Output** | MP4, MKV, MOV, AVI, FLV, WebM |
-| **Audio Output** | MP3, AAC, FLAC, WAV, OGG, AC3 |
-| **Video Codecs** | H.264, H.265, VP9, AV1, NVIDIA NVENC |
-| **Audio Codecs** | AAC, MP3, FLAC, Opus, AC3 |
+Скачай из [**Releases**](https://github.com/bboyJohnn/CineConvert/releases) один из двух вариантов:
 
+| Файл | Размер | Для кого |
+|---|---|---|
+| 🕹 **CineConvert-portable.zip** | ~110 МБ | **Рекомендуется.** Распаковал → запустил `CineConvert.exe` → работает сразу, полностью офлайн. FFmpeg уже внутри |
+| 🪶 **CineConvert.exe** | ~37 МБ | Лёгкий вариант. При первом запуске сам скачает FFmpeg (~80 МБ, нужен интернет один раз) |
+
+> Ничего устанавливать не нужно: ни Python, ни библиотеки, ни FFmpeg отдельно. Windows SmartScreen может спросить про неизвестного издателя — «Подробнее» → «Выполнить в любом случае».
+
+```
+═══════════════════════════ СКРИНШОТЫ ═══════════════════════════
+```
+
+<div align="center">
+
+| Тёмная тема | Настройки |
+|---|---|
+| ![Тёмная тема](docs/screen-dark.png) | ![Настройки](docs/screen-settings.png) |
+
+</div>
+
+```
+═══════════════════ ХАРАКТЕРИСТИКИ КАРТРИДЖА ═══════════════════
+```
+
+- **Один файл исходника** — весь интерфейс и логика в `CineConvert.py` (~2700 строк, PyQt5/PyQt6-совместимо)
+- **Тема** — цвета считаются в OKLCH (как в современном CSS) и собираются в Qt-стили на лету
+- **Воркеры** — FFmpeg крутится в отдельных потоках, интерфейс не подвисает, конвертацию можно отменить
+- **Надёжное обновление FFmpeg** — скачивание с докачкой в `.part`, проверка запуска нового бинарника, атомарная подмена папки с бэкапом и откатом
+- **Конфиг** — `config.json` рядом с exe: тема, язык, папка сохранения, последние настройки кодирования, размер окна
+- **Локали** — `locales/*.json`: ключ = objectName виджета или текст пункта; файл с полем `"name"` появляется в списке языков автоматически
+
+```
+════════════════════════ СБОРКА ИЗ ИСХОДНИКОВ ════════════════════════
+                    ↑ ↑ ↓ ↓ ← → ← → B A START
+```
+
+```bash
+# Игрок 1 присоединился
+git clone https://github.com/bboyJohnn/CineConvert.git
+cd CineConvert
+pip install PyQt5 pyinstaller pillow
+
+# Запуск из исходника (FFmpeg скачается сам при первом старте)
+python CineConvert.py
+
+# Сборка exe + портативного zip (папка release/)
+python build_release.py
+```
+
+```
+═══════════════════════════ КОНТИНЬЮ ═══════════════════════════
+```
+
+- 📁 **`old/`** — предыдущая версия программы (один экран, старый дизайн). Хранится для истории
+- 🐛 **Баг?** — открой [Issue](https://github.com/bboyJohnn/CineConvert/issues) с логом из вкладки «Логи»
+- 🧡 Построено на [FFmpeg](https://ffmpeg.org/) (сборки [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)) и [PyQt5](https://pypi.org/project/PyQt5/)
+
+<div align="center">
+
+```
+  GAME OVER? НЕТ — ЖМИ «РЕНДЕР» ЕЩЁ РАЗ
+  © bboyJohnn • CONTINUE ▶
+```
+
+</div>

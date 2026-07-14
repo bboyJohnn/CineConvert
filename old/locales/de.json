@@ -1,0 +1,28 @@
+{
+  "name": "Deutsch",
+  "window_title": "Cine Convert",
+  "group_source": "Quellvideo",
+  "input_path.placeholder": "Videodatei auswählen...",
+  "btn_browse_input": "Durchsuchen...",
+  "btn_browse_multi": "Mehrere Videos auswählen...",
+
+  "group_output": "Ausgabevideo",
+  "output_path.placeholder": "Wo das Ergebnis speichern...",
+  "btn_browse_output": "Durchsuchen...",
+
+  "group_info": "Video-Informationen",
+  "group_preview": "Vorschau",
+  "preview_label": "Vorschau wird hier angezeigt...",
+  "batch_status_label": "",
+  "main_progress_bar": "",
+  "btn_render": "Video-Rendering starten",
+  "btn_extract": "Audio extrahieren",
+  "chk_video_notify": "Benachrichtigung nach dem Video-Rendering anzeigen",
+  "chk_audio_notify": "Benachrichtigung nach der Audioextraktion anzeigen",
+  "btn_save_settings": "Einstellungen speichern",
+  "tab_video": "Video",
+  "tab_audio_settings": "Audio-Einstellungen",
+  "tab_audio_extract": "Audio extrahieren",
+  "tab_logs": "Protokolle",
+  "tab_settings": "Einstellungen"
+}
