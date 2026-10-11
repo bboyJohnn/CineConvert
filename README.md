@@ -23,7 +23,7 @@
 
 **CineConvert** is a video converter that works **out of the box**: download it, run it, convert. No installer, no registry, no "please download this other thing first". All settings live in `config.json` right next to the program — carry it on a USB stick.
 
-**FFmpeg** under the hood, a clean interface on top — with a live theme: pick any color with the rainbow slider and the whole app repaints instantly. Light and dark modes included.
+**FFmpeg** under the hood, a modern interface on top: sidebar navigation, a drag & drop zone, one action bar with progress, settings cards with toggles, the **Inter** font and **Lucide** icons. The live theme stays: pick any color with the rainbow slider and the whole app repaints instantly — light and dark modes included, and the animated waves still roll across the header.
 
 <div align="center">
 
@@ -37,14 +37,19 @@
 
 | | Feature | Description |
 |---|---|---|
-| 🎬 | **Video conversion** | Resolution (4K→144p), codec (x264, x265, NVENC, VP9, AV1), bitrate, container (mp4, mkv, mov, avi, flv, webm) |
-| ⚡ | **Smart lossless mode** | If you change nothing, streams are **copied 1:1** with no re-encoding: mp4→mkv in a second with zero quality loss |
+| 🎬 | **Video conversion** | Resolution (4K→144p), codec (x264, x265, AV1, VP9, NVIDIA NVENC, Intel QSV, AMD AMF), bitrate, container (mp4, mkv, mov, avi, flv, webm) |
+| 🎚 | **Quality presets** | *As source* / *Maximum* / *Balanced* / *Smaller file* — constant-quality encoding (CRF/CQ) with per-encoder values modelled on HandBrake's built-in presets. Smaller files with no visible loss instead of FFmpeg's bare defaults |
+| ⚡ | **Smart lossless mode** | Streams are **copied 1:1** whenever the target container accepts the source codec: mp4→mkv *and* mkv→mp4 in a second with zero quality loss |
+| 🧠 | **Safe defaults** | 4:2:0 pixel format for H.264 (plays everywhere), `hvc1` tag for HEVC in mp4/mov (Apple), `+faststart` for web playback, subtitles kept in MKV, audio auto-fixed for the container (Opus for WebM, MP3 for AVI) |
+| 📐 | **Smart scaling** | Fits the frame into the chosen size: vertical videos stay vertical, no black bars, no upscaling, Lanczos scaler |
+| 🖥 | **Hardware encoders** | NVENC / QSV / AMF are test-encoded before the run; if the GPU or driver can't do it, the software encoder takes over automatically |
 | 🎧 | **Audio while converting** | Codec (aac, mp3, flac, opus, ac3), bitrate, channels (mono/stereo/5.1/7.1) or "copy as is" |
-| 🎵 | **Audio extraction** | Rip the audio track to mp3, aac, flac, wav, ogg, ac3 |
-| 📦 | **Batch processing** | Pick several files (or drag & drop) — they convert one by one |
+| 🎵 | **Audio extraction** | Rip the audio track to mp3, aac, flac, wav, ogg, ac3 — copied without re-encoding when the track already is in that format |
+| 📦 | **Batch processing** | Drop several files on the window or use "Add more" — they convert one by one |
 | 🔍 | **Video info** | Preview frame + 12 key facts at a glance; a "Details" button opens the full breakdown of every stream; with multiple files, page through them with ‹ › |
-| 🖥 | **Live theme** | Any color (OKLCH slider + color picker), saturation, light/dark/system, animated waves in the header |
-| 🌐 | **7 languages** | en, ru, de, es, fr, zh, ar — translations are plain JSON, easy to add your own |
+| 🎨 | **Live theme** | Any color (OKLCH slider + color picker), saturation, light/dark/system, a one-click theme toggle in the sidebar, animated waves in the header |
+| 🌐 | **7 languages** | en, ru, de, es, fr, zh, ar — every screen is translated; translations are plain JSON, easy to add your own |
+| ⌨ | **Shortcuts** | `Ctrl+O` open files · `Ctrl+Enter` start · `Ctrl+1…4` switch sections |
 | 🔄 | **1-click FFmpeg update** | Settings → FFmpeg: checks your version against the latest gyan.dev build and updates atomically (rolls back on failure) |
 | 💾 | **Everything auto-saves** | There is no "Save" button — every setting applies and persists instantly, including window size |
 
@@ -52,12 +57,12 @@
 ═══════════════════════════ CONTROLS ═══════════════════════════
 ```
 
-1. **📂 Pick a video** — the "Browse…" button (multiple files allowed) or drag & drop into the window
-2. **⚙ Tune it** — "Video" tab: resolution / codec / bitrate / format + audio options below. Leave everything on "No changes" for an instant lossless remux
-3. **▶ Hit "Render"** — the app asks where to save (default folder is configurable), then shows progress, speed and ETA
+1. **📂 Pick a video** — drop files onto the window or click the drop zone (multiple files allowed)
+2. **⚙ Tune it** — "Video" section: format, quality, resolution / codec / bitrate + audio options below. Leave everything on "As source" / "No changes" for an instant lossless remux
+3. **▶ Hit "Render"** in the action bar at the bottom — the app asks where to save (or saves straight to the default folder, if you turn the question off), then shows progress, speed and ETA
 4. **🏁 Done** — a notification with sound, plus "Open file" / "Open folder" buttons
 
-Audio ripping lives on the **"Audio"** tab: pick a format → "Extract audio".
+Audio ripping lives in the **"Audio"** section: pick a format → "Extract audio".
 
 ```
 ══════════════════════════ SELECT LEVEL ══════════════════════════
@@ -83,14 +88,20 @@ Grab one of the two builds from [**Releases**](https://github.com/bboyJohnn/Cine
 |---|---|
 | ![Dark theme](docs/screen-dark.png) | ![Settings](docs/screen-settings.png) |
 
+| Audio extraction |
+|---|
+| ![Audio](docs/screen-audio.png) |
+
 </div>
 
 ```
 ═══════════════════ CARTRIDGE SPECS ═══════════════════
 ```
 
-- **Single source file** — the whole UI and logic in `CineConvert.py` (~2700 lines, PyQt5/PyQt6-compatible)
-- **Theme engine** — colors are computed in OKLCH (like modern CSS) and compiled into Qt stylesheets on the fly
+- **Single source file** — the whole UI and logic in `CineConvert.py` (PyQt5/PyQt6-compatible)
+- **Theme engine** — colors are computed in OKLCH (like modern CSS) and compiled into one Qt stylesheet on the fly
+- **Typography & icons** — [Inter](https://rsms.me/inter/) (`fonts/`, SIL OFL 1.1, hinted for crisp Windows rendering) and [Lucide](https://lucide.dev) icons (ISC) rendered from SVG in the theme color
+- **Encoding engine** — quality profiles per encoder, codec↔container compatibility tables, stream-copy decisions based on `ffprobe`
 - **Workers** — FFmpeg runs in background threads, the UI never freezes, conversion is cancellable
 - **Reliable FFmpeg updates** — download via `.part` with integrity check, the new binary is test-run before an atomic folder swap with backup and rollback
 - **Config** — `config.json` next to the exe: theme, language, output folder, last encoding settings, window size
@@ -120,7 +131,7 @@ python build_release.py
 
 - 📁 **`old/`** — the previous version of the app (single screen, old design). Kept for history
 - 🐛 **Found a bug?** — open an [Issue](https://github.com/bboyJohnn/CineConvert/issues) with the log from the "Logs" tab
-- 🧡 Built on [FFmpeg](https://ffmpeg.org/) ([gyan.dev](https://www.gyan.dev/ffmpeg/builds/) builds) and [PyQt5](https://pypi.org/project/PyQt5/)
+- 🧡 Built on [FFmpeg](https://ffmpeg.org/) ([gyan.dev](https://www.gyan.dev/ffmpeg/builds/) builds) and [PyQt5](https://pypi.org/project/PyQt5/); font [Inter](https://github.com/rsms/inter) (OFL), icons [Lucide](https://lucide.dev) (ISC); quality presets inspired by [HandBrake](https://handbrake.fr/)
 
 <div align="center">
 
