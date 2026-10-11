@@ -37,6 +37,10 @@
 
 | | Feature | Description |
 |---|---|---|
+| 🗂 | **File list** | Every file gets a card: preview, format · resolution · codec · bitrate · duration · size, and quick combos to change format / resolution / codec / bitrate **for that file only** |
+| 🔬 | **Per-file settings** | Click a preview or "Settings" to drill into one video: its full characteristics card plus **Basic** and **Advanced** tabs |
+| ☑ | **Group settings** | Tick several files → "Set up selected" opens the same window for all of them; only the fields you change are applied, "mixed" marks where files differ. Render / extract then works on the ticked files |
+| 🧪 | **Advanced options** | Quality preset, exact CRF/CQ, encoding speed, frame rate, trim (start/end), audio codec/bitrate/channels, remove audio |
 | 🎬 | **Video conversion** | Resolution (4K→144p), codec (x264, x265, AV1, VP9, NVIDIA NVENC, Intel QSV, AMD AMF), bitrate, container (mp4, mkv, mov, avi, flv, webm) |
 | 🎚 | **Quality presets** | *As source* / *Maximum* / *Balanced* / *Smaller file* — constant-quality encoding (CRF/CQ) with per-encoder values modelled on HandBrake's built-in presets. Smaller files with no visible loss instead of FFmpeg's bare defaults |
 | ⚡ | **Smart lossless mode** | Streams are **copied 1:1** whenever the target container accepts the source codec: mp4→mkv *and* mkv→mp4 in a second with zero quality loss |
@@ -45,7 +49,7 @@
 | 🖥 | **Hardware encoders** | NVENC / QSV / AMF are test-encoded before the run; if the GPU or driver can't do it, the software encoder takes over automatically |
 | 🎧 | **Audio while converting** | Codec (aac, mp3, flac, opus, ac3), bitrate, channels (mono/stereo/5.1/7.1) or "copy as is" |
 | 🎵 | **Audio extraction** | Rip the audio track to mp3, aac, flac, wav, ogg, ac3 — copied without re-encoding when the track already is in that format |
-| 📦 | **Batch processing** | Drop several files on the window or use "Add more" — they convert one by one |
+| 📦 | **Batch processing** | Drop several files on the window or use "Add" — they convert one by one, each with its own or the common settings; audio extraction works in batches too |
 | 🔍 | **Video info** | Preview frame + 12 key facts at a glance; a "Details" button opens the full breakdown of every stream; with multiple files, page through them with ‹ › |
 | 🎨 | **Live theme** | Any color (OKLCH slider + color picker), saturation, light/dark/system, a one-click theme toggle in the sidebar, animated waves in the header |
 | 🌐 | **7 languages** | en, ru, de, es, fr, zh, ar — every screen is translated; translations are plain JSON, easy to add your own |
@@ -57,9 +61,9 @@
 ═══════════════════════════ CONTROLS ═══════════════════════════
 ```
 
-1. **📂 Pick a video** — drop files onto the window or click the drop zone (multiple files allowed)
-2. **⚙ Tune it** — "Video" section: format, quality, resolution / codec / bitrate + audio options below. Leave everything on "As source" / "No changes" for an instant lossless remux
-3. **▶ Hit "Render"** in the action bar at the bottom — the app asks where to save (or saves straight to the default folder, if you turn the question off), then shows progress, speed and ETA
+1. **📂 Pick videos** — drop files onto the window or click the drop zone (multiple files allowed); each one appears in the list with its own card
+2. **⚙ Tune them** — the "Common video settings" card applies to every file; change format / resolution / codec / bitrate right on a file's card, or open its "Settings" for the Basic and Advanced tabs. Tick several files and press "Set up selected" to configure them together. Leave everything on "As source" / "No changes" for an instant lossless remux
+3. **▶ Hit "Render"** in the action bar at the bottom (with files ticked it renders only those) — the app asks where to save (or saves straight to the default folder, if you turn the question off), then shows progress, speed and ETA
 4. **🏁 Done** — a notification with sound, plus "Open file" / "Open folder" buttons
 
 Audio ripping lives in the **"Audio"** section: pick a format → "Extract audio".
@@ -87,6 +91,10 @@ Grab one of the two builds from [**Releases**](https://github.com/bboyJohnn/Cine
 | Dark theme | Settings |
 |---|---|
 | ![Dark theme](docs/screen-dark.png) | ![Settings](docs/screen-settings.png) |
+
+| File settings (Basic / Advanced) | Several files at once |
+|---|---|
+| ![File settings](docs/screen-file-settings.png) | ![Group settings](docs/screen-group-settings.png) |
 
 | Audio extraction |
 |---|
