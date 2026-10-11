@@ -39,8 +39,10 @@
 |---|---|---|
 | 🗂 | **File list** | Every file gets a card: preview, format · resolution · codec · bitrate · duration · size, and quick combos to change format / resolution / codec / bitrate **for that file only** |
 | 🔬 | **Per-file settings** | Click a preview or "Settings" to drill into one video: its full characteristics card plus **Basic** and **Advanced** tabs |
-| ☑ | **Group settings** | Tick several files → "Set up selected" opens the same window for all of them; only the fields you change are applied, "mixed" marks where files differ. Render / extract then works on the ticked files |
+| 🎛 | **Common settings panel** | Below the list: **Basic** (format, quality, resolution, codec, bitrate) and **Advanced** (exact CRF/CQ, speed, frame rate, audio in the video, mute) tabs for every file that has no settings of its own |
+| ☑ | **Selected files** | Tick files and the same panel edits **only them** — every change shows up on their cards at once. "Set up selected" opens a window with both tabs plus trimming; only the fields you change are applied, "mixed" marks where files differ, Cancel puts everything back. Render / extract then works on the ticked files |
 | 🧪 | **Advanced options** | Quality preset, exact CRF/CQ, encoding speed, frame rate, trim (start/end), audio codec/bitrate/channels, remove audio |
+| 🔢 | **Bitrate presets** | Video bitrate from a list of 1000k…10000k in 1000k steps, or type your own (a bare number means kbit/s) |
 | 🎬 | **Video conversion** | Resolution (4K→144p), codec (x264, x265, AV1, VP9, NVIDIA NVENC, Intel QSV, AMD AMF), bitrate, container (mp4, mkv, mov, avi, flv, webm) |
 | 🎚 | **Quality presets** | *As source* / *Maximum* / *Balanced* / *Smaller file* — constant-quality encoding (CRF/CQ) with per-encoder values modelled on HandBrake's built-in presets. Smaller files with no visible loss instead of FFmpeg's bare defaults |
 | ⚡ | **Smart lossless mode** | Streams are **copied 1:1** whenever the target container accepts the source codec: mp4→mkv *and* mkv→mp4 in a second with zero quality loss |
@@ -48,7 +50,8 @@
 | 📐 | **Smart scaling** | Fits the frame into the chosen size: vertical videos stay vertical, no black bars, no upscaling, Lanczos scaler |
 | 🖥 | **Hardware encoders** | NVENC / QSV / AMF are test-encoded before the run; if the GPU or driver can't do it, the software encoder takes over automatically |
 | 🎧 | **Audio while converting** | Codec (aac, mp3, flac, opus, ac3), bitrate, channels (mono/stereo/5.1/7.1) or "copy as is" |
-| 🎵 | **Audio extraction** | Rip the audio track to mp3, aac, flac, wav, ogg, ac3 — copied without re-encoding when the track already is in that format |
+| 🎵 | **Audio extraction** | Rip audio to mp3, aac, flac, wav, ogg, opus, ac3 — copied without re-encoding when the track already is in that format |
+| 🎧 | **Per-file extraction** | On the Audio page every card has its own format, bitrate, channels and **audio track** (language/commentary — real track names from the file) plus an "Extract" button for just that video. "Settings" adds a **fragment** (start/end), sample rate and **loudness normalization** (EBU R128). Tick several to set them up or extract them together |
 | 📦 | **Batch processing** | Drop several files on the window or use "Add" — they convert one by one, each with its own or the common settings; audio extraction works in batches too |
 | 🔍 | **Video info** | Preview frame + 12 key facts at a glance; a "Details" button opens the full breakdown of every stream; with multiple files, page through them with ‹ › |
 | 🎨 | **Live theme** | Any color (OKLCH slider + color picker), saturation, light/dark/system, a one-click theme toggle in the sidebar, animated waves in the header |
@@ -96,9 +99,13 @@ Grab one of the two builds from [**Releases**](https://github.com/bboyJohnn/Cine
 |---|---|
 | ![File settings](docs/screen-file-settings.png) | ![Group settings](docs/screen-group-settings.png) |
 
-| Audio extraction |
+| Selected files: the panel edits only them | Audio extraction per file |
+|---|---|
+| ![Selected files](docs/screen-selected.png) | ![Audio](docs/screen-audio.png) |
+
+| Extraction settings: track, fragment, loudness |
 |---|
-| ![Audio](docs/screen-audio.png) |
+| ![Audio settings](docs/screen-audio-settings.png) |
 
 </div>
 
@@ -112,7 +119,7 @@ Grab one of the two builds from [**Releases**](https://github.com/bboyJohnn/Cine
 - **Encoding engine** — quality profiles per encoder, codec↔container compatibility tables, stream-copy decisions based on `ffprobe`
 - **Workers** — FFmpeg runs in background threads, the UI never freezes, conversion is cancellable
 - **Reliable FFmpeg updates** — download via `.part` with integrity check, the new binary is test-run before an atomic folder swap with backup and rollback
-- **Config** — `config.json` next to the exe: theme, language, output folder, last encoding settings, window size
+- **Config** — `config.json` next to the exe: theme, language, output folder, common render and extraction settings, window size
 - **Locales** — `locales/*.json`: key = widget objectName or item text; any file with a `"name"` field shows up in the language list automatically
 
 ```

@@ -18,6 +18,7 @@ import shutil
 import re
 import ssl
 import time
+import types
 try:
     from PyQt6.QtWidgets import (
         QApplication, QDialog, QVBoxLayout, QLabel, QProgressBar, QPushButton, QMessageBox,
@@ -447,6 +448,8 @@ def set_theme(hue=None, saturation=None, dark=None):
 
         QFrame#card {{ background: {T.COLOR_CARD_BG}; border: 1px solid {T.COLOR_CARD_BORDER};
             border-radius: 16px; }}
+        QWidget#filesPanel[dragActive="true"] {{ border: 1px dashed {T.COLOR_PRIMARY};
+            border-radius: 16px; background: {T.COLOR_ACCENT_SOFT}; }}
         QFrame#card[dragActive="true"] {{ border: 1px solid {T.COLOR_PRIMARY};
             background: {T.COLOR_ACCENT_SOFT}; }}
         QFrame#fileCard {{ background: {T.COLOR_CARD_BG}; border: 1px solid {T.COLOR_CARD_BORDER};
@@ -1036,6 +1039,7 @@ class SegmentedControl(QFrame):
     нужную часть API QComboBox, чтобы сохранение/восстановление настроек и
     переводы работали одинаково."""
     currentIndexChanged = pyqtSignal(int)
+    activated = pyqtSignal(int)        # выбор человеком (даже того же сегмента)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1056,7 +1060,7 @@ class SegmentedControl(QFrame):
         b.setMinimumHeight(32)
         b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         idx = len(self._buttons)
-        b.clicked.connect(lambda _checked=False, i=idx: self.setCurrentIndex(i))
+        b.clicked.connect(lambda _checked=False, i=idx: self._clicked(i))
         self._group.addButton(b)
         self._layout.addWidget(b, 1)
         self._buttons.append(b)
@@ -1077,6 +1081,10 @@ class SegmentedControl(QFrame):
         for b, kind in zip(self._buttons, self._icons):
             if kind:
                 b.setIcon(make_icon(kind, T.COLOR_TEXT_MUTED, T.COLOR_ACCENT_TEXT, 16))
+
+    def _clicked(self, index):
+        self.setCurrentIndex(index)
+        self.activated.emit(index)
 
     def setCurrentIndex(self, index):
         if not 0 <= index < len(self._buttons):
@@ -1357,8 +1365,9 @@ class ClickablePreview(PreviewView):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(pos):
+            self.clicked.emit()       # отпустили за пределами превью — не клик
         super().mouseReleaseEvent(event)
 
 
@@ -1823,20 +1832,47 @@ class ProbeThread(QThread):
         super().__init__(parent)
         self.ffprobe, self.ffmpeg = ffprobe, ffmpeg
         self.paths = list(paths)
+        self.skip = set()          # файлы, убранные из списка до анализа
         self._stop = False
+        self._proc = None
 
     def stop(self):
         self._stop = True
+        proc = self._proc
+        if proc is not None:
+            try:
+                proc.kill()        # не ждать до 30 с, пока ffprobe/ffmpeg закончит
+            except Exception:
+                pass
+
+    def _run(self, cmd, text):
+        if self._stop:
+            return None, None
+        kw = dict(stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+        if text:
+            kw.update(text=True, encoding="utf-8", errors="replace")
+        proc = subprocess.Popen(cmd, **kw)
+        self._proc = proc
+        try:
+            out, _ = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, _ = proc.communicate()
+        finally:
+            self._proc = None
+        return proc.returncode, out
 
     def run(self):
         for path in self.paths:
             if self._stop:
                 return
+            if path in self.skip:
+                continue
             info = None
             try:
-                r = run_hidden([self.ffprobe, '-v', 'error', '-show_format', '-show_streams',
-                                '-of', 'json', path], capture_output=True, text=True, timeout=30)
-                info = json.loads(r.stdout or "{}") if r.returncode == 0 else None
+                rc, out = self._run([self.ffprobe, '-v', 'error', '-show_format', '-show_streams',
+                                     '-of', 'json', path], text=True)
+                info = json.loads(out or "{}") if rc == 0 else None
             except Exception:
                 info = None
             if self._stop:
@@ -1848,14 +1884,16 @@ class ProbeThread(QThread):
             seek = min(1.0, dur / 2) if dur else 1.0
             jpeg = None
             try:
-                # stdout=PIPE без text=…: байты JPEG не должны перекодироваться в строку
-                r = run_hidden([self.ffmpeg, '-v', 'error', '-ss', f'{seek:.2f}', '-i', path,
-                                '-frames:v', '1', '-vf', 'scale=480:-2', '-f', 'image2pipe',
-                                '-c:v', 'mjpeg', '-q:v', '3', 'pipe:1'],
-                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
-                jpeg = r.stdout if r.returncode == 0 and r.stdout else None
+                # байты JPEG не перекодируются в строку; рамка 480×270 — чётко и на HiDPI
+                rc, out = self._run([self.ffmpeg, '-v', 'error', '-ss', f'{seek:.2f}', '-i', path,
+                                     '-frames:v', '1', '-vf',
+                                     'scale=480:270:force_original_aspect_ratio=decrease:force_divisible_by=2',
+                                     '-f', 'image2pipe', '-c:v', 'mjpeg', '-q:v', '3', 'pipe:1'], text=False)
+                jpeg = out if rc == 0 and out else None
             except Exception:
                 jpeg = None
+            if self._stop:
+                return
             self.probed.emit(path, info, jpeg)
 
 
@@ -2400,6 +2438,9 @@ CONTAINER_DEFAULT_AUDIO = {"webm": "libopus", "avi": "libmp3lame", "mpg": "mp2",
                            "wmv": "wmav2"}
 MKV_SUBTITLES = {"subrip", "ass", "ssa", "hdmv_pgs_subtitle", "dvd_subtitle", "webvtt", "text"}
 TEXT_SUBTITLES = {"subrip", "ass", "ssa", "webvtt", "mov_text", "text"}
+# В MPEG-TS/PS демультиплексор считает ключевым любой пакет: переход -ss до -i
+# попадает на случайный кадр, поэтому для обрезки — точный переход после -i
+SEEK_UNSAFE_EXTS = ("ts", "m2ts", "mts", "mpg", "mpeg", "vob")
 
 
 def parse_bitrate(token):
@@ -2440,6 +2481,8 @@ def video_rate_args(encoder, level="balanced", bitrate=None, src10=False, contai
     br = parse_bitrate(bitrate) if bitrate else None
     capped = ["-b:v", str(br), "-maxrate", str(int(br * 1.5)), "-bufsize", str(br * 2)] if br else []
     fast, slow = speed == "fast", speed == "slow"
+    if crf is not None:   # шкала 0–63 только у VP9/AV1; x264/x265/NVENC/QSV/AMF — до 51
+        crf = max(0, min(63 if encoder in ("libvpx-vp9", "libsvtav1", "libaom-av1") else 51, int(crf)))
 
     def q(key):
         return str(crf) if crf is not None else str(prof[key][i])
@@ -2501,11 +2544,12 @@ def video_rate_args(encoder, level="balanced", bitrate=None, src10=False, contai
             args += ["-rc", "vbr_peak", "-b:v", str(br), "-maxrate", str(int(br * 1.5))]
         else:
             qp = int(crf) if crf is not None else prof["qp"][i]
-            args += ["-rc", "cqp", "-qp_i", str(qp), "-qp_p", str(qp + 2)]
+            args += ["-rc", "cqp", "-qp_i", str(qp), "-qp_p", str(min(51, qp + 2))]
             if encoder == "h264_amf":
-                args += ["-qp_b", str(qp + 4)]
+                args += ["-qp_b", str(min(51, qp + 4))]
     elif encoder in ("mpeg4", "mpeg2video", "wmv2"):
-        qv = max(1, min(31, int(crf))) if crf is not None else prof["q"][i]
+        # qscale 1–31 — другая шкала: CRF 18 ≈ q 2, CRF 23 ≈ q 4, CRF 30 ≈ q 6
+        qv = max(1, min(31, round((int(crf) - 12) / 3))) if crf is not None else prof["q"][i]
         args += ["-b:v", str(br)] if br else ["-q:v", str(qv)]
         args += ["-pix_fmt", "yuv420p"]
         if encoder == "mpeg4" and container == "avi":
@@ -2534,14 +2578,14 @@ def parse_time(text):
     total = 0.0
     for n in nums:
         total = total * 60 + n
-    return total
+    return total if math.isfinite(total) else None     # «inf», «nan», «1e400» — не время
 
 
 def format_time(seconds):
     """Секунды → '1:02:03' / '2:03' (для подсказок и полей обрезки)."""
     try:
         tenths_total = int(round(float(seconds) * 10))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return ""
     whole, tenths = divmod(max(0, tenths_total), 10)
     m, s = divmod(whole, 60)
@@ -2606,7 +2650,7 @@ VCODEC_ITEMS = [
     ("H.264 · Intel QSV", "h264_qsv"), ("H.265 · Intel QSV", "hevc_qsv"),
     ("H.264 · AMD", "h264_amf"), ("H.265 · AMD", "hevc_amf"),
 ]
-BITRATE_ITEMS = [(t, None) for t in ("Без изменений", "500k", "1M", "2M", "5M", "10M", "20M")]
+BITRATE_ITEMS = [("Без изменений", None)] + [(f"{k}k", f"{k}k") for k in range(1000, 10001, 1000)]
 QUALITY_ITEMS = [("Как в исходнике", None), ("Максимальное", "high"), ("Баланс", "balanced"),
                  ("Меньший размер", "small")]
 CRF_ITEMS = [("Авто", None)] + [(str(v), v) for v in (16, 18, 20, 22, 24, 26, 28, 30, 32, 35, 38)]
@@ -2614,14 +2658,77 @@ SPEED_ITEMS = [("Авто", None), ("Быстрее", "fast"), ("Медленн�
 FPS_ITEMS = [("Без изменений", None)] + [(label, value) for label, value in FPS_CHOICES]
 ACODEC_ITEMS = [("Без изменений", None), ("Копировать (copy)", "copy"), ("aac", "aac"), ("mp3", "mp3"),
                 ("flac", "flac"), ("opus", "opus"), ("ac3", "ac3")]
-ABITRATE_ITEMS = [(t, None) for t in ("Без изменений", "64k", "128k", "192k", "256k", "320k")]
+ABITRATE_ITEMS = [("Без изменений", None)] + [(t, t) for t in ("64k", "96k", "128k", "160k", "192k",
+                                                              "256k", "320k")]
 ACHANNEL_ITEMS = [("Без изменений", None), ("1 (моно)", "1"), ("2 (стерео)", "2"), ("5.1", "6"),
                   ("7.1", "8")]
 
-# Ключи настроек рендера; «расширенные» задаются только для отдельных файлов
-BASIC_KEYS = ("format", "video_codec", "resolution", "bitrate")
-DEFAULT_ADVANCED = {"crf": None, "speed": None, "fps": None, "trim_start": None, "trim_end": None,
-                    "mute": False}
+# Извлечение звука
+EXTRACT_FORMAT_ITEMS = [(f.upper(), f) for f in ("mp3", "aac", "flac", "wav", "ogg", "opus", "ac3")]
+EXTRACT_BITRATE_ITEMS = [("Авто", None)] + [(t, t) for t in ("96k", "128k", "160k", "192k", "256k", "320k")]
+SAMPLE_RATE_ITEMS = [("Без изменений", None), ("22.05 kHz", "22050"), ("44.1 kHz", "44100"),
+                     ("48 kHz", "48000"), ("96 kHz", "96000")]
+LOSSLESS_AUDIO = ("flac", "wav")
+TIME_KEYS = ("trim_start", "trim_end")
+
+# Настройки рендера (kind="video") и извлечения звука (kind="audio"). Общие
+# параметры страницы хранятся в таком же словаре, но без обрезки — она бывает
+# только у отдельных файлов.
+VIDEO_DEFAULTS = {"format": None, "quality": None, "resolution": None, "video_codec": None,
+                  "bitrate": None, "crf": None, "speed": None, "fps": None,
+                  "trim_start": None, "trim_end": None, "mute": False,
+                  "audio_codec": None, "audio_bitrate": None, "audio_channels": None}
+EXTRACT_DEFAULTS = {"format": "mp3", "bitrate": None, "channels": None, "sample_rate": None,
+                    "track": None, "normalize": False, "trim_start": None, "trim_end": None}
+SETTINGS_DEFAULTS = {"video": VIDEO_DEFAULTS, "audio": EXTRACT_DEFAULTS}
+_SETTING_CHOICES = {
+    ("video", "format"): FORMAT_ITEMS, ("video", "quality"): QUALITY_ITEMS,
+    ("video", "resolution"): RESOLUTION_ITEMS, ("video", "video_codec"): VCODEC_ITEMS,
+    ("video", "speed"): SPEED_ITEMS, ("video", "fps"): FPS_ITEMS,
+    ("video", "audio_codec"): ACODEC_ITEMS, ("video", "audio_channels"): ACHANNEL_ITEMS,
+    ("audio", "format"): EXTRACT_FORMAT_ITEMS, ("audio", "channels"): ACHANNEL_ITEMS,
+    ("audio", "sample_rate"): SAMPLE_RATE_ITEMS,
+}
+
+
+def sanitize_settings(kind, saved):
+    """Сохранённые общие параметры → проверенный словарь (неизвестное — по умолчанию)."""
+    out = dict(SETTINGS_DEFAULTS[kind])
+    if not isinstance(saved, dict):
+        return out
+    for key, default in SETTINGS_DEFAULTS[kind].items():
+        if key in TIME_KEYS or key not in saved:
+            continue
+        value = saved[key]
+        choices = _SETTING_CHOICES.get((kind, key))
+        if choices is not None:
+            if any(value == data for _t, data in choices):
+                out[key] = value
+        elif isinstance(default, bool):
+            out[key] = bool(value)
+        elif key in ("bitrate", "audio_bitrate"):
+            out[key] = value if isinstance(value, str) and parse_bitrate(value) else None
+        elif key in ("crf", "track"):
+            ok = isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 63
+            out[key] = value if ok else None
+    return out
+
+
+QUALITY_HINTS = {
+    None: "Видео копируется без перекодирования, если формат это позволяет — мгновенно и без потерь",
+    "high": "Визуально без потерь (как CRF 18 у x264) — файл крупнее",
+    "balanced": "Качество почти неотличимо от исходника, файл заметно меньше — рекомендуем",
+    "small": "Сильнее сжатие — для отправки и хранения, мелкие детали чуть мягче",
+}
+AUDIO_FORMAT_HINTS = {
+    "mp3": "MP3 — совместим со всем, сжатие с потерями",
+    "aac": "AAC — компактный и качественный, отлично для телефонов",
+    "flac": "FLAC — без потери качества, файл заметно больше",
+    "wav": "WAV — несжатый PCM, максимальный размер",
+    "ogg": "OGG Vorbis — открытый формат, сжатие с потерями",
+    "opus": "Opus — лучшее качество на малом битрейте, современные плееры и браузеры",
+    "ac3": "AC3 — Dolby Digital, подходит для 5.1",
+}
 CODEC_NAMES = {"h264": "H.264", "hevc": "H.265", "av1": "AV1", "vp9": "VP9", "vp8": "VP8",
                "mpeg4": "MPEG-4", "mpeg2video": "MPEG-2", "mpeg1video": "MPEG-1", "prores": "ProRes",
                "mjpeg": "MJPEG", "wmv3": "WMV", "vc1": "VC-1"}
@@ -2635,7 +2742,9 @@ def combo_value(combo):
     token = txt.split()[0] if txt else ""
     if getattr(combo, "_numeric", False):
         return int(token) if token.isdigit() else None
-    return token if _BITRATE_RE.match(token) else None
+    if token.isdigit():
+        token += "k"          # просто число — это кбит/с: «5000» → 5000k
+    return token if _BITRATE_RE.match(token) and parse_bitrate(token) else None
 
 
 def set_combo_value(combo, value):
@@ -2649,6 +2758,9 @@ def set_combo_value(combo, value):
             return
     if combo.isEditable():
         i = combo.findText(str(value))
+        if i < 0 and not getattr(combo, "_numeric", False):
+            bits = parse_bitrate(value)       # «2M» из старых настроек = пункт «2000k»
+            i = next((j for j in range(1, combo.count()) if bits and parse_bitrate(combo.itemText(j)) == bits), -1)
         if i >= 0:
             combo.setCurrentIndex(i)
         else:
@@ -2673,7 +2785,10 @@ def make_combo(items, editable=False, numeric=False, compact=False):
     combo = ComboBox()
     combo.add_items(items)
     combo.setEditable(editable)
+    if editable:
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)   # Enter не добавляет пункты
     combo._numeric = numeric
+    retranslate_combo(combo)
     if compact:
         combo.setProperty("compact", True)
         combo.setMinimumHeight(32)
@@ -2717,6 +2832,44 @@ def media_streams(info):
     return (video[0] if video else {}), (audio[0] if audio else {})
 
 
+def audio_tracks(info):
+    return [s for s in ((info or {}).get('streams') or []) if s.get('codec_type') == 'audio']
+
+
+def track_label(index, stream):
+    parts = [str(index + 1), (stream.get('codec_name') or "?").upper()]
+    if stream.get('channels'):
+        parts.append(tr_fmt("{n} кан.", n=stream.get('channels')))
+    tags = stream.get('tags') or {}
+    lang = str(tags.get('language') or tags.get('LANGUAGE') or "")
+    if lang and lang.lower() != "und":
+        parts.append(lang)
+    title = str(tags.get('title') or tags.get('TITLE') or "")
+    if title:
+        parts.append(title if len(title) <= 24 else title[:23] + "…")
+    return " · ".join(parts)
+
+
+def track_items(info=None):
+    """Выбор звуковой дорожки: реальные дорожки файла или «Дорожка N» для группы.
+    Значение — номер дорожки с нуля; None — первая."""
+    tracks = audio_tracks(info)
+    if tracks:
+        return [(track_label(i, s), None if i == 0 else i) for i, s in enumerate(tracks)]
+    return [(tr("Первая дорожка"), None)] + [(tr_fmt("Дорожка {n}", n=n), n - 1) for n in range(2, 9)]
+
+
+def fill_track_combo(combo, info=None):
+    """Перезаполняет список дорожек, сохраняя выбранную (если она есть в новом списке)."""
+    value = combo.currentData() if combo.count() else None
+    blocked = combo.blockSignals(True)
+    combo.clear()
+    combo._orig = []
+    combo.add_items(track_items(info))
+    set_combo_value(combo, value)
+    combo.blockSignals(blocked)
+
+
 def media_duration(info):
     fmt = (info or {}).get('format') or {}
     v, _a = media_streams(info)
@@ -2750,6 +2903,9 @@ def media_summary(info, path, audio=False):
         rate = _fmt_rate(a.get('bit_rate'))
         if rate:
             parts.append(rate)
+        tracks = len(audio_tracks(info))
+        if tracks > 1:
+            parts.append(tr_fmt("дорожек: {n}", n=tracks))
     else:
         parts = [container_name(info, path).upper()]
         if v.get('width') and v.get('height'):
@@ -2825,29 +2981,386 @@ def fill_facts_grid(grid, pairs, cols=3):
 
 class MediaItem:
     """Файл в списке: путь, ffprobe, превью, отметка и (если заданы) свои настройки.
-    settings is None — файл следует общим параметрам со страницы «Видео»."""
-    __slots__ = ("path", "info", "thumb", "settings", "checked", "card", "probed")
+    settings is None — рендер по общим параметрам страницы «Видео»;
+    extract is None — извлечение звука по общим параметрам страницы «Аудио»."""
+    __slots__ = ("path", "info", "thumb", "settings", "extract", "checked", "card", "probed")
 
     def __init__(self, path):
         self.path = path
         self.info = None
         self.thumb = None
         self.settings = None
+        self.extract = None
         self.checked = False
         self.card = None
         self.probed = False
 
 
 # ============================================================================
+#  Поля настроек: «Основные» и «Расширенные» — для рендера видео и для
+#  извлечения звука. Один и тот же набор полей стоит на странице (общие
+#  параметры или отмеченные файлы) и в окне настроек файла/группы.
+# ============================================================================
+class SettingsForm(QWidget):
+    """Вкладки «Основные»/«Расширенные» с полями настроек. kind: "video" — рендер,
+    "audio" — извлечение звука. trim=True добавляет обрезку (только для файлов).
+    О правке поля человеком сообщает сигнал edited(ключ); программная загрузка
+    значений (load) и смена языка сигнал не посылают."""
+    edited = pyqtSignal(str)
+
+    def __init__(self, kind, trim=False, info=None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("transparent")
+        self.kind, self.trim, self.info = kind, trim, info
+        self.fields, self.markers = {}, {}
+        self._texts = []      # (виджет, ключ, текст по умолчанию, "text"/"tip") — для смены языка
+        self._icons = []      # (QLabel, иконка) — заголовки разделов и подсказки
+        self._loading = False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(16)
+        self.tabs = SegmentedControl()
+        self.tabs.add_items([("", "basic", "sliders-horizontal"), ("", "advanced", "gauge")])
+        self.tabs.setMaximumWidth(380)
+        lay.addWidget(self.tabs, 0, Qt.AlignmentFlag.AlignLeft)
+        self.pages, self._page_layouts = [], []
+        for _ in range(2):
+            page = QWidget()
+            page.setObjectName("transparent")
+            v = QVBoxLayout(page)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(12)
+            lay.addWidget(page)
+            self.pages.append(page)
+            self._page_layouts.append(v)
+        if kind == "video":
+            self._build_video()
+        else:
+            self._build_audio()
+        # Вкладки переключаются видимостью: QStackedWidget учитывал бы высоту
+        # скрытой вкладки и давал лишнюю прокрутку
+        self.tabs.currentIndexChanged.connect(self._show_tab)
+        self._show_tab(0)
+        self._connect()
+        self.retranslate()
+        self.refresh_icons()
+
+    # ---- построение ----
+    def _t(self, widget, key, default, kind="text"):
+        self._texts.append((widget, key, default, kind))
+        return widget
+
+    def _field(self, key, lkey, label, widget, display=None, tip_key=None, tip=None):
+        holder = QWidget()
+        holder.setObjectName("transparent")
+        v = QVBoxLayout(holder)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        head.addWidget(self._t(_set_role(QLabel(), "field"), lkey, label))
+        marker = _set_role(QLabel(), "pillAccent")
+        self._t(marker, "разные", "разные")
+        self._t(marker, "tip_mixed", "У выбранных файлов сейчас разные значения — "
+                                     "они сохранятся, пока вы не измените поле", "tip")
+        marker.setVisible(False)
+        head.addWidget(marker)
+        head.addStretch(1)
+        v.addLayout(head)
+        v.addWidget(display or widget)
+        if tip_key:
+            self._t(widget, tip_key, tip, "tip")
+        self.fields[key] = widget
+        self.markers[key] = marker
+        return holder
+
+    def _toggle(self, key, lkey, label, text_key, text):
+        switch = ToggleSwitch()
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 6, 0, 6)
+        row.setSpacing(10)
+        row.addWidget(switch)
+        row.addWidget(self._t(_set_role(QLabel(), "rowTitle"), text_key, text), 1)
+        holder = QWidget()
+        holder.setObjectName("transparent")
+        holder.setLayout(row)
+        return self._field(key, lkey, label, switch, display=holder)
+
+    def _section(self, layout, icon, tkey, title, skey=None, sub=None, first=False):
+        if not first:
+            layout.addSpacing(4)
+            layout.addWidget(make_divider())
+            layout.addSpacing(2)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        ic = QLabel()
+        ic.setFixedSize(18, 18)
+        self._icons.append((ic, icon))
+        row.addWidget(ic, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self._t(_set_role(QLabel(), "rowTitle"), tkey, title), 1)
+        layout.addLayout(row)
+        if sub:
+            s = self._t(_set_role(QLabel(), "caption"), skey, sub)
+            s.setWordWrap(True)
+            layout.addWidget(s)
+        return self._grid(layout)
+
+    @staticmethod
+    def _grid(layout):
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+        for c in range(3):
+            grid.setColumnStretch(c, 1)
+        layout.addLayout(grid)
+        return grid
+
+    def _hint_row(self, layout):
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        ic = QLabel()
+        ic.setFixedSize(16, 16)
+        self._icons.append((ic, "info"))
+        row.addWidget(ic, 0, Qt.AlignmentFlag.AlignTop)
+        self.hint = _set_role(QLabel(), "sub")
+        self.hint.setWordWrap(True)
+        row.addWidget(self.hint, 1)
+        layout.addLayout(row)
+
+    def _segmented(self, items):
+        seg = SegmentedControl()
+        seg.add_items(items)
+        return seg
+
+    def _time_edit(self, placeholder=""):
+        edit = QLineEdit()
+        edit.setPlaceholderText(placeholder)
+        edit.setMinimumHeight(38)
+        return edit
+
+    def _build_video(self):
+        basic, adv = self._page_layouts
+        basic.addWidget(self._field("format", "lbl_format", "Формат", self._segmented(FORMAT_ITEMS),
+                                    tip_key="tip_format",
+                                    tip="Контейнер выходного файла. «Исходный» — оставить как у исходника."))
+        basic.addWidget(self._field("quality", "lbl_quality", "Качество", self._segmented(QUALITY_ITEMS),
+                                    tip_key="tip_quality",
+                                    tip="Качество при перекодировании (CRF/CQ, как в HandBrake). "
+                                        "«Как в исходнике» — без перекодирования, если возможно."))
+        self._hint_row(basic)
+        grid = self._grid(basic)
+        grid.addWidget(self._field("resolution", "lbl_resolution", "Разрешение", make_combo(RESOLUTION_ITEMS)),
+                       0, 0)
+        grid.addWidget(self._field("video_codec", "lbl_codec", "Кодек", make_combo(VCODEC_ITEMS),
+                                   tip_key="tip_codec",
+                                   tip="«Без изменений» — кодек исходника. Аппаратные кодеки "
+                                       "(NVIDIA/Intel/AMD) проверяются перед запуском; если не работают — "
+                                       "берётся программный."), 0, 1)
+        grid.addWidget(self._field("bitrate", "lbl_bitrate", "Битрейт", make_combo(BITRATE_ITEMS, editable=True),
+                                   tip_key="tip_bitrate",
+                                   tip="Средний битрейт видео (напр. 2000k) вместо качества. «Без изменений» — "
+                                       "управлять качеством (рекомендуется). Можно ввести своё значение."), 0, 2)
+
+        grid = self._section(adv, "gauge", "sec_quality_speed", "Качество и скорость", "sec_quality_speed_sub",
+                             "Точное значение заменяет профиль качества: меньше — лучше и крупнее. "
+                             "Шкала: x264/x265 0–51, AV1/VP9 0–63, NVENC CQ 0–51.", first=True)
+        grid.addWidget(self._field("crf", "lbl_crf", "Точное качество (CRF/CQ)",
+                                   make_combo(CRF_ITEMS, editable=True, numeric=True)), 0, 0)
+        grid.addWidget(self._field("speed", "lbl_speed", "Скорость кодирования", make_combo(SPEED_ITEMS)), 0, 1)
+        if self.trim:
+            grid = self._section(adv, "scissors", "sec_frame_trim", "Кадр и обрезка", "sec_frame_trim_sub",
+                                 "Время: 90, 1:30 или 0:01:30.5. Без перекодирования начало режется "
+                                 "по ближайшему ключевому кадру.")
+        else:
+            grid = self._section(adv, "film", "sec_frame", "Кадр")
+        grid.addWidget(self._field("fps", "lbl_fps", "Частота кадров", make_combo(FPS_ITEMS)), 0, 0)
+        if self.trim:
+            grid.addWidget(self._field("trim_start", "lbl_trim_start", "Начало", self._time_edit("0:00")), 0, 1)
+            grid.addWidget(self._field("trim_end", "lbl_trim_end", "Конец", self._time_edit()), 0, 2)
+        grid = self._section(adv, "audio-lines", "card_vaudio", "Звук в видео", "card_vaudio_sub",
+                             "Кодек, битрейт и каналы звуковой дорожки результата")
+        grid.addWidget(self._field("audio_codec", "lbl_acodec", "Кодек", make_combo(ACODEC_ITEMS)), 0, 0)
+        grid.addWidget(self._field("audio_bitrate", "lbl_abitrate", "Битрейт",
+                                   make_combo(ABITRATE_ITEMS, editable=True)), 0, 1)
+        grid.addWidget(self._field("audio_channels", "lbl_achannels", "Каналы", make_combo(ACHANNEL_ITEMS)), 0, 2)
+        grid.addWidget(self._toggle("mute", "lbl_sound", "Звук", "lbl_mute", "Убрать звук из видео"), 1, 0, 1, 3)
+        basic.addStretch(1)
+        adv.addStretch(1)
+
+    def _build_audio(self):
+        basic, adv = self._page_layouts
+        basic.addWidget(self._field("format", "lbl_aformat", "Формат аудио",
+                                    self._segmented(EXTRACT_FORMAT_ITEMS)))
+        self._hint_row(basic)
+        grid = self._grid(basic)
+        grid.addWidget(self._field("bitrate", "lbl_abitrate", "Битрейт",
+                                   make_combo(EXTRACT_BITRATE_ITEMS, editable=True),
+                                   tip_key="tip_extract_bitrate",
+                                   tip="«Авто» — высокое качество для выбранного формата. "
+                                       "Для FLAC и WAV битрейт не нужен — они без потерь."), 0, 0)
+        grid.addWidget(self._field("channels", "lbl_achannels", "Каналы", make_combo(ACHANNEL_ITEMS)), 0, 1)
+        track = ComboBox()
+        fill_track_combo(track, self.info)
+        grid.addWidget(self._field("track", "lbl_track", "Дорожка", track,
+                                   tip_key="tip_track",
+                                   tip="Из какой звуковой дорожки извлекать — например, другой язык "
+                                       "или комментарии. Если такой дорожки нет — берётся первая."), 0, 2)
+        if self.trim:
+            grid = self._section(adv, "scissors", "sec_fragment", "Фрагмент", "sec_fragment_sub",
+                                 "Какой кусок звука сохранить. Время: 90, 1:30 или 0:01:30.5; "
+                                 "пусто — с самого начала и до конца.", first=True)
+            grid.addWidget(self._field("trim_start", "lbl_trim_start", "Начало", self._time_edit("0:00")), 0, 0)
+            grid.addWidget(self._field("trim_end", "lbl_trim_end", "Конец", self._time_edit()), 0, 1)
+        grid = self._section(adv, "waves", "sec_processing", "Обработка звука", first=not self.trim)
+        grid.addWidget(self._field("sample_rate", "lbl_sample_rate", "Частота дискретизации",
+                                   make_combo(SAMPLE_RATE_ITEMS)), 0, 0)
+        grid.addWidget(self._toggle("normalize", "lbl_loudness", "Громкость", "lbl_normalize",
+                                    "Выровнять громкость (EBU R128)"), 0, 1, 1, 2)
+        basic.addStretch(1)
+        adv.addStretch(1)
+
+    def _connect(self):
+        for key, w in self.fields.items():
+            emit = (lambda *_a, k=key: self._emit(k))
+            if isinstance(w, SegmentedControl):
+                w.activated.connect(emit)          # клик, даже по уже выбранному («разные»)
+                w.currentIndexChanged.connect(self._update_hint)
+            elif isinstance(w, QComboBox):
+                w.currentIndexChanged.connect(emit)
+                w.activated.connect(emit)          # повторный выбор того же пункта тоже правка
+                if w.isEditable():
+                    w.editTextChanged.connect(emit)
+            elif isinstance(w, QCheckBox):
+                w.toggled.connect(emit)
+            else:
+                w.textEdited.connect(emit)
+
+    def _show_tab(self, index):
+        for i, page in enumerate(self.pages):
+            page.setVisible(i == index)
+
+    # ---- значения ----
+    def get(self, key):
+        w = self.fields[key]
+        if isinstance(w, (QComboBox, SegmentedControl)):
+            return combo_value(w)
+        if isinstance(w, QCheckBox):
+            return w.isChecked()
+        return parse_time(w.text())
+
+    def set(self, key, value):
+        w = self.fields[key]
+        if isinstance(w, (QComboBox, SegmentedControl)):
+            set_combo_value(w, value)
+            if isinstance(w, QComboBox) and w.isEditable():
+                w.lineEdit().setCursorPosition(0)
+        elif isinstance(w, QCheckBox):
+            w.setChecked(bool(value))
+        else:
+            w.setText(format_time(value) if value is not None else "")
+
+    @staticmethod
+    def _typing(w):
+        if isinstance(w, QComboBox) and w.isEditable():
+            return w.lineEdit().hasFocus()
+        return isinstance(w, QLineEdit) and w.hasFocus()
+
+    def load(self, values):
+        """Показывает значения: первый словарь — в полях, расхождения — пометкой «разные»."""
+        values = list(values) or [{}]
+        self._loading = True
+        try:
+            for key, w in self.fields.items():
+                vals = [v.get(key) for v in values]
+                if not self._typing(w):      # не сбивать ввод под курсором
+                    self.set(key, vals[0])
+                self.markers[key].setVisible(len(values) > 1 and any(x != vals[0] for x in vals))
+        finally:
+            self._loading = False
+        self._update_hint()
+
+    def set_info(self, info):
+        """Анализ файла завершился — реальные дорожки и длительность."""
+        self.info = info
+        self._loading = True
+        try:
+            if "track" in self.fields:
+                fill_track_combo(self.fields["track"], info)
+            self._placeholders()
+        finally:
+            self._loading = False
+
+    def _emit(self, key):
+        if self._loading:
+            return
+        self.markers[key].setVisible(False)
+        self._update_hint()
+        self.edited.emit(key)
+
+    def _update_hint(self, *_):
+        if self.kind == "video":
+            level = self.fields["quality"].currentData()
+            reencode = level is None and any(self.get(k) for k in ("video_codec", "resolution", "bitrate", "fps"))
+            if reencode:   # «Как в исходнике», но выбран кодек/размер/битрейт — копии не будет
+                self.hint.setText(tr("qhint_reencode", "Выбранные параметры требуют перекодирования — "
+                                                       "качество будет «Баланс»"))
+            else:
+                self.hint.setText(tr(f"qhint_{level or 'source'}", QUALITY_HINTS.get(level, "")))
+        else:
+            fmt = self.fields["format"].currentData() or ""
+            self.hint.setText(tr(f"afmt_{fmt}", AUDIO_FORMAT_HINTS.get(fmt, "")))
+            self.fields["bitrate"].setEnabled(fmt not in LOSSLESS_AUDIO)
+
+    def _placeholders(self):
+        if "trim_end" in self.fields:
+            dur = media_duration(self.info) if self.info else None
+            self.fields["trim_end"].setPlaceholderText(format_time(dur) if dur else tr("до конца"))
+
+    # ---- язык и тема ----
+    def retranslate(self):
+        self._loading = True
+        try:
+            for w, key, default, kind in self._texts:
+                if kind == "tip":
+                    w.setToolTip(tr(key, default))
+                else:
+                    w.setText(tr(key, default))
+            self.tabs.setItemText(0, tr("tab_basic", "Основные"))
+            self.tabs.setItemText(1, tr("tab_advanced", "Расширенные"))
+            for key, w in self.fields.items():
+                if key == "track":
+                    fill_track_combo(w, self.info)
+                elif isinstance(w, (QComboBox, SegmentedControl)):
+                    retranslate_combo(w)
+            self._placeholders()
+        finally:
+            self._loading = False
+        self._update_hint()
+
+    def refresh_icons(self):
+        for ic, kind in self._icons:
+            ic.setPixmap(icon_pixmap(kind, T.COLOR_TEXT_MUTED, ic.width(), 2.0))
+        self.tabs.refresh_icons()
+
+
+# ============================================================================
 #  Карточка файла в списке
 # ============================================================================
 class FileCard(QFrame):
-    """Превью + характеристики + быстрые настройки рендера именно этого файла."""
+    """Превью + характеристики + быстрые настройки именно этого файла: на «Видео» —
+    формат, разрешение, кодек и битрейт рендера; на «Аудио» — формат, битрейт,
+    каналы и дорожка извлекаемого звука."""
 
-    QUICK = (("format", FORMAT_ITEMS, False, "lbl_format", "Формат"),
-             ("resolution", RESOLUTION_ITEMS, False, "lbl_resolution", "Разрешение"),
-             ("video_codec", VCODEC_ITEMS, False, "lbl_codec", "Кодек"),
-             ("bitrate", BITRATE_ITEMS, True, "lbl_bitrate", "Битрейт"))
+    QUICK = {
+        "video": (("format", FORMAT_ITEMS, False, "lbl_format", "Формат"),
+                  ("resolution", RESOLUTION_ITEMS, False, "lbl_resolution", "Разрешение"),
+                  ("video_codec", VCODEC_ITEMS, False, "lbl_codec", "Кодек"),
+                  ("bitrate", BITRATE_ITEMS, True, "lbl_bitrate", "Битрейт")),
+        "audio": (("format", EXTRACT_FORMAT_ITEMS, False, "lbl_format", "Формат"),
+                  ("bitrate", EXTRACT_BITRATE_ITEMS, True, "lbl_bitrate", "Битрейт"),
+                  ("channels", ACHANNEL_ITEMS, False, "lbl_achannels", "Каналы"),
+                  ("track", None, False, "lbl_track", "Дорожка")),
+    }
 
     def __init__(self, owner, item):
         super().__init__()
@@ -2856,6 +3369,7 @@ class FileCard(QFrame):
         self._loading = False
         self._audio_mode = False
         self._compact = False
+        self._tracks = -1
         h = QHBoxLayout(self)
         h.setContentsMargins(12, 10, 12, 10)
         h.setSpacing(12)
@@ -2863,7 +3377,7 @@ class FileCard(QFrame):
         self.check.toggled.connect(lambda on: owner.set_item_checked(item, on))
         h.addWidget(self.check, 0, Qt.AlignmentFlag.AlignVCenter)
         self.thumb = ClickablePreview(128, 72)
-        self.thumb.clicked.connect(lambda: None if self._audio_mode else owner.open_item_settings(item))
+        self.thumb.clicked.connect(lambda: owner.open_item_settings(item))
         h.addWidget(self.thumb, 0, Qt.AlignmentFlag.AlignVCenter)
 
         col = QVBoxLayout()
@@ -2878,8 +3392,11 @@ class FileCard(QFrame):
         self.own_badge = _set_role(QLabel(), "pillAccent")
         top.addWidget(self.own_badge)
         self.btn_reset = style_button(QPushButton(), "icon", flat=True)
-        self.btn_reset.clicked.connect(lambda: owner.reset_item_settings([item]))
+        self.btn_reset.clicked.connect(lambda: owner.reset_item_settings([item], self.kind))
         top.addWidget(self.btn_reset)
+        self.btn_extract = style_button(QPushButton(), "ghost")
+        self.btn_extract.clicked.connect(lambda: owner.extract_audio(items=[item]))
+        top.addWidget(self.btn_extract)
         self.btn_settings = style_button(QPushButton(), "ghost")
         self.btn_settings.clicked.connect(lambda: owner.open_item_settings(item))
         top.addWidget(self.btn_settings)
@@ -2890,62 +3407,98 @@ class FileCard(QFrame):
         self.meta = _set_role(ElidedLabel(""), "sub")
         col.addWidget(self.meta)
 
-        self.quick = QWidget()
-        self.quick.setObjectName("transparent")
-        q = QGridLayout(self.quick)
-        q.setContentsMargins(0, 2, 0, 0)
-        q.setHorizontalSpacing(6)
-        q.setVerticalSpacing(2)
-        self.combos, self.captions = {}, {}
-        for i, (key, items, editable, _lkey, _label) in enumerate(self.QUICK):
-            caption = _set_role(QLabel(), "caption")
-            caption.setContentsMargins(2, 0, 0, 0)
-            combo = make_combo(items, editable=editable, compact=True)
-            combo.currentIndexChanged.connect(lambda _i, k=key: self._changed(k))
-            if editable:
-                combo.editTextChanged.connect(lambda _t, k=key: self._changed(k))
-            self.combos[key], self.captions[key] = combo, caption
-            q.addWidget(caption, 0, i)
-            q.addWidget(combo, 1, i)
-            q.setColumnStretch(i, 1)
-        col.addWidget(self.quick)
+        self.quick, self.combos, self.captions = {}, {}, {}
+        for kind, fields in self.QUICK.items():
+            box = QWidget()
+            box.setObjectName("transparent")
+            q = QGridLayout(box)
+            q.setContentsMargins(0, 2, 0, 0)
+            q.setHorizontalSpacing(6)
+            q.setVerticalSpacing(2)
+            self.combos[kind], self.captions[kind] = {}, {}
+            for i, (key, items, editable, _lkey, _label) in enumerate(fields):
+                caption = _set_role(QLabel(), "caption")
+                caption.setContentsMargins(2, 0, 0, 0)
+                combo = make_combo(items or [], editable=editable, compact=True)
+                combo.currentIndexChanged.connect(lambda _i, k=key, kd=kind: self._changed(kd, k))
+                if editable:
+                    combo.editTextChanged.connect(lambda _t, k=key, kd=kind: self._changed(kd, k))
+                self.combos[kind][key], self.captions[kind][key] = combo, caption
+                q.addWidget(caption, 0, i)
+                q.addWidget(combo, 1, i)
+                q.setColumnStretch(i, 1)
+            self.quick[kind] = box
+            col.addWidget(box)
         h.addLayout(col, 1)
+        self.set_audio_mode(False)
         self.retranslate()
         self.refresh_icons()
 
+    @property
+    def kind(self):
+        return "audio" if self._audio_mode else "video"
+
     # ---- реакция на быстрые настройки ----
-    def _changed(self, key):
+    def _changed(self, kind, key):
         if not self._loading:
-            self.owner.set_item_value(self.item, key, combo_value(self.combos[key]))
+            self.owner.set_item_value(self.item, key, combo_value(self.combos[kind][key]), kind)
 
     def set_compact(self, compact):
         """Узкое окно: кнопки и значок — только иконки."""
         self._compact = bool(compact)
         self.copy_badge.label.setVisible(not compact)
+        self._button_texts()
+
+    def _button_texts(self):
+        compact = self._compact
         self.btn_settings.setText("" if compact else " " + tr("btn_item_settings", "Настроить"))
+        self.btn_extract.setText("" if compact else " " + tr("btn_extract_item", "Извлечь"))
 
     def set_audio_mode(self, audio):
         self._audio_mode = bool(audio)
-        self.quick.setVisible(not audio)
-        self.btn_settings.setVisible(not audio)
+        self.quick["video"].setVisible(not audio)
+        self.quick["audio"].setVisible(audio)
+        self.btn_extract.setVisible(audio)
+        self._tooltips()
         self.refresh()
+
+    def _tooltips(self):
+        tip = (tr("tip_item_extract_settings", "Все параметры извлечения звука из этого видео: "
+                                               "дорожка, фрагмент, формат")
+               if self._audio_mode else
+               tr("tip_item_settings", "Все параметры этого видео: основные и расширенные"))
+        self.btn_settings.setToolTip(tip)
+        self.thumb.setToolTip(tip)
 
     def refresh(self):
         """Перечитывает состояние файла: значения, значки, превью, выделение."""
         item, owner = self.item, self.owner
-        eff = owner.effective_settings(item)
         self._loading = True
-        for key, combo in self.combos.items():
-            if combo.isEditable() and combo.lineEdit().hasFocus():
-                continue          # не сбивать ввод битрейта под курсором
-            set_combo_value(combo, eff.get(key))
-            if combo.isEditable():
-                combo.lineEdit().setCursorPosition(0)   # в узком поле видно начало текста
-        self._loading = False
-        own = item.settings is not None
-        self.own_badge.setVisible(own and not self._audio_mode)
-        self.btn_reset.setVisible(own and not self._audio_mode)
-        self.copy_badge.setVisible(not self._audio_mode and item.probed and owner.item_is_copy(item))
+        try:
+            n_tracks = len(audio_tracks(item.info))
+            if n_tracks != self._tracks:
+                self._tracks = n_tracks
+                track = self.combos["audio"]["track"]
+                fill_track_combo(track, item.info)
+                track.setEnabled(n_tracks > 1)
+            track = self.combos["audio"]["track"]
+            for kind, combos in self.combos.items():
+                eff = owner.effective_settings(item, kind)
+                for key, combo in combos.items():
+                    if combo.isEditable() and combo.lineEdit().hasFocus():
+                        continue          # не сбивать ввод битрейта под курсором
+                    set_combo_value(combo, eff.get(key))
+                    if combo.isEditable():
+                        combo.lineEdit().setCursorPosition(0)   # в узком поле видно начало текста
+            track.setToolTip(track.currentText())     # в узкой карточке текст дорожки обрезан
+            lossless = owner.effective_settings(item, "audio").get("format") in LOSSLESS_AUDIO
+            self.combos["audio"]["bitrate"].setEnabled(not lossless)
+        finally:
+            self._loading = False
+        own = owner.item_has_own(item, self.kind)
+        self.own_badge.setVisible(own)
+        self.btn_reset.setVisible(own)
+        self.copy_badge.setVisible(bool(item.probed and owner.item_is_copy(item, self.kind)))
         if not item.probed:
             self.meta.setText(tr("Анализ файла…"))
         else:
@@ -2965,18 +3518,29 @@ class FileCard(QFrame):
             repolish(self)
 
     def retranslate(self):
-        for key, combo in self.combos.items():
-            retranslate_combo(combo)
-        for key, _items, _editable, lkey, label in self.QUICK:
-            self.captions[key].setText(tr(lkey, label))
+        # смена текста пунктов переписывает поле битрейта и шлёт editTextChanged —
+        # это не правка человеком, иначе файл молча получил бы «свои настройки»
+        self._loading = True
+        try:
+            for kind, combos in self.combos.items():
+                for key, combo in combos.items():
+                    if key == "track":
+                        fill_track_combo(combo, self.item.info)
+                    else:
+                        retranslate_combo(combo)
+        finally:
+            self._loading = False
+        for kind, fields in self.QUICK.items():
+            for key, _items, _editable, lkey, label in fields:
+                self.captions[kind][key].setText(tr(lkey, label))
         self.copy_badge.label.setText(tr("badge_lossless", "Без перекодирования"))
         self.own_badge.setText(tr("own_settings", "Свои настройки"))
         self.btn_reset.setToolTip(tr("tip_reset_item", "Вернуть общие параметры"))
-        self.btn_settings.setText("" if self._compact else " " + tr("btn_item_settings", "Настроить"))
-        self.btn_settings.setToolTip(tr("tip_item_settings", "Все параметры этого видео: основные и расширенные"))
+        self.btn_extract.setToolTip(tr("tip_extract_item", "Извлечь звук только из этого видео"))
         self.btn_remove.setToolTip(tr("tip_remove_item", "Убрать из списка"))
         self.check.setToolTip(tr("tip_select_item", "Отметить, чтобы настроить или обработать вместе с другими"))
-        self.thumb.setToolTip(tr("tip_item_settings", "Все параметры этого видео: основные и расширенные"))
+        self._button_texts()
+        self._tooltips()
         self.refresh()
 
     def refresh_icons(self):
@@ -2984,7 +3548,8 @@ class FileCard(QFrame):
         self.btn_reset.setIcon(make_icon("rotate-ccw", T.COLOR_TEXT_MUTED, px=16))
         self.btn_remove.setIcon(make_icon("x", T.COLOR_TEXT_MUTED, px=16))
         self.btn_settings.setIcon(make_icon("sliders-horizontal", T.COLOR_TEXT_MUTED, px=16))
-        for b in (self.btn_reset, self.btn_remove, self.btn_settings):
+        self.btn_extract.setIcon(make_icon("download", T.COLOR_TEXT_MUTED, px=16))
+        for b in (self.btn_reset, self.btn_remove, self.btn_settings, self.btn_extract):
             b.setIconSize(QSize(16, 16))
         self.thumb.update()
         self.check.update()
@@ -2994,47 +3559,51 @@ class FileCard(QFrame):
 #  Окно настроек файла / нескольких выбранных файлов
 # ============================================================================
 class FileSettingsDialog(ThemedDialog):
-    """Две вкладки: «Основные» (формат, кодек, разрешение, битрейт) и «Расширенные»
-    (качество, точный CRF, скорость, FPS, обрезка, звук). Для одного файла сверху —
-    его карточка характеристик; для группы — список выбранных. Применяются только
-    изменённые поля, поэтому у группы с разными настройками остальное не трогается."""
+    """Вкладки «Основные» и «Расширенные» для рендера (kind="video") или извлечения
+    звука (kind="audio"). Для одного файла сверху — его карточка характеристик; для
+    группы — список выбранных. Правки сразу видны в списке файлов; «Отмена»
+    возвращает как было. Применяются только изменённые поля, поэтому у группы
+    с разными настройками остальное не трогается."""
 
-    def __init__(self, owner, items, parent=None):
+    def __init__(self, owner, items, kind="video", parent=None):
         self.items = list(items)
+        self.kind = kind
         self.group = len(self.items) > 1
-        title = (tr_fmt("Настройки для {n} файлов", n=len(self.items)) if self.group
-                 else os.path.basename(self.items[0].path))
+        audio = kind == "audio"
+        if self.group:
+            title = (tr_fmt("Извлечение звука: {n} файлов", n=len(self.items)) if audio
+                     else tr_fmt("Настройки для {n} файлов", n=len(self.items)))
+        else:
+            title = os.path.basename(self.items[0].path)
         super().__init__(parent, title)
         self.owner = owner
         self.render_after = False
-        self.fields = {}
-        self.markers = {}
         self._touched = set()
+        # как было до окна — для «Отмены» (правки применяются к файлам сразу)
+        self._snapshot = [(it, owner.own_settings(it, kind)) for it in self.items]
         self.setMinimumSize(720, 640)
-        self.resize(780, 720)
+        self.resize(800, 740)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 20, 22, 18)
         lay.setSpacing(14)
-        lay.addWidget(self._build_header())
+        self._lay = lay
+        self._header = self._build_header()
+        lay.addWidget(self._header)
 
-        self.tabs = SegmentedControl()
-        self.tabs.add_items([(tr("tab_basic", "Основные"), "basic", "sliders-horizontal"),
-                             (tr("tab_advanced", "Расширенные"), "advanced", "gauge")])
-        self.tabs.setFixedWidth(380)
-        lay.addWidget(self.tabs, 0, Qt.AlignmentFlag.AlignLeft)
-        self.stack = QStackedWidget()
-        self.stack.addWidget(self._wrap_scroll(self._build_basic()))
-        self.stack.addWidget(self._wrap_scroll(self._build_advanced()))
-        self.tabs.currentIndexChanged.connect(self.stack.setCurrentIndex)
-        lay.addWidget(self.stack, 1)
+        self.form = SettingsForm(kind, trim=True, info=None if self.group else self.items[0].info)
+        card = make_card()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(18, 16, 18, 18)
+        cl.addWidget(self.form)
+        lay.addWidget(self._wrap_scroll(card), 1)
 
         row = QHBoxLayout()
         row.setSpacing(8)
         self.btn_reset = style_button(QPushButton(" " + tr("btn_reset_item", "Вернуть общие")), "ghost")
         self.btn_reset.setIcon(make_icon("rotate-ccw", T.COLOR_TEXT_MUTED, px=16))
         self.btn_reset.setToolTip(tr("tip_reset_item", "Вернуть общие параметры"))
-        self.btn_reset.setVisible(any(it.settings is not None for it in self.items))
+        self.btn_reset.setVisible(any(snap is not None for _it, snap in self._snapshot))
         self.btn_reset.clicked.connect(self._reset)
         row.addWidget(self.btn_reset)
         row.addStretch(1)
@@ -3044,16 +3613,25 @@ class FileSettingsDialog(ThemedDialog):
         apply_btn = style_button(QPushButton(tr("btn_apply", "Применить")))
         apply_btn.clicked.connect(lambda: self._finish(False))
         row.addWidget(apply_btn)
-        render_btn = style_button(QPushButton(" " + (tr("btn_apply_render_group", "Применить и рендер выбранных")
-                                                     if self.group else
-                                                     tr("btn_apply_render", "Применить и рендер"))), "primary")
-        render_btn.setIcon(make_icon("play", T.COLOR_ON_PRIMARY, px=16))
-        render_btn.clicked.connect(lambda: self._finish(True))
-        render_btn.setEnabled(not owner._busy)
-        row.addWidget(render_btn)
+        if audio:
+            text = (tr("btn_apply_extract_group", "Применить и извлечь из выбранных") if self.group
+                    else tr("btn_apply_extract", "Применить и извлечь"))
+        else:
+            text = (tr("btn_apply_render_group", "Применить и рендер выбранных") if self.group
+                    else tr("btn_apply_render", "Применить и рендер"))
+        go_btn = style_button(QPushButton(" " + text), "primary")
+        go_btn.setIcon(make_icon("download" if audio else "play", T.COLOR_ON_PRIMARY, px=16))
+        go_btn.clicked.connect(lambda: self._finish(True))
+        go_btn.setEnabled(not owner._busy)
+        row.addWidget(go_btn)
         lay.addLayout(row)
+        # Enter в любом поле — «Применить» (а не первая попавшаяся кнопка окна)
+        for b in self.findChildren(QPushButton):
+            b.setAutoDefault(False)
+        apply_btn.setDefault(True)
 
-        self._load_values()
+        self.form.load([owner.effective_settings(it, kind) for it in self.items])
+        self.form.edited.connect(self._on_edit)
 
     # ---- шапка: карточка файла или список выбранных ----
     def _build_header(self):
@@ -3067,7 +3645,7 @@ class FileSettingsDialog(ThemedDialog):
             if it.thumb is not None:
                 pv.setPixmap(it.thumb)
             else:
-                pv.setText(tr("нет кадра"))
+                pv.setText(tr("нет кадра") if it.probed else tr("Анализ файла…"))
             h.addWidget(pv, 0, Qt.AlignmentFlag.AlignTop)
             col = QVBoxLayout()
             col.setSpacing(4)
@@ -3089,6 +3667,7 @@ class FileSettingsDialog(ThemedDialog):
             col.addStretch(1)
             streams = style_button(QPushButton(" " + tr("btn_streams", "Все потоки…")))
             streams.setIcon(make_icon("info", T.COLOR_BTN_TEXT, px=16))
+            streams.setAutoDefault(False)
             streams.setEnabled(bool(it.info))
             streams.clicked.connect(lambda: VideoInfoDialog(it.info or {}, it.path, it.thumb, self).exec())
             col.addWidget(streams, 0, Qt.AlignmentFlag.AlignLeft)
@@ -3112,6 +3691,17 @@ class FileSettingsDialog(ThemedDialog):
             h.addLayout(col, 1)
         return card
 
+    def item_probed(self, item):
+        """Файл проанализирован, пока окно открыто: обновить кадр, факты и дорожки."""
+        if self.group or item is not self.items[0]:
+            return
+        new = self._build_header()
+        self._lay.replaceWidget(self._header, new)
+        self._header.setParent(None)
+        self._header.deleteLater()
+        self._header = new
+        self.form.set_info(item.info)
+
     @staticmethod
     def _wrap_scroll(widget):
         scroll = QScrollArea()
@@ -3121,187 +3711,70 @@ class FileSettingsDialog(ThemedDialog):
         scroll.setWidget(widget)
         return scroll
 
-    def _section(self, icon, title, sub=None):
-        card = make_card()
-        v = QVBoxLayout(card)
-        v.setContentsMargins(18, 14, 18, 16)
-        v.setSpacing(10)
-        head = QHBoxLayout()
-        head.setSpacing(12)
-        head.addWidget(IconBadge(icon), 0, Qt.AlignmentFlag.AlignVCenter)
-        tcol = QVBoxLayout()
-        tcol.setSpacing(1)
-        tcol.addWidget(_set_role(QLabel(title), "title"))
-        if sub:
-            s = _set_role(QLabel(sub), "sub")
-            s.setWordWrap(True)
-            tcol.addWidget(s)
-        head.addLayout(tcol, 1)
-        v.addLayout(head)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(6)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        v.addLayout(grid)
-        return card, v, grid
-
-    def _add_field(self, grid, row, col, key, label, widget, display=None):
-        head = QHBoxLayout()
-        head.setSpacing(6)
-        head.addWidget(_set_role(QLabel(label), "field"))
-        marker = _set_role(QLabel(tr("разные")), "pillAccent")
-        marker.setToolTip(tr("tip_mixed", "У выбранных файлов сейчас разные значения — "
-                                          "они сохранятся, пока вы не измените поле"))
-        marker.setVisible(False)
-        head.addWidget(marker)
-        head.addStretch(1)
-        holder = QWidget()
-        holder.setObjectName("transparent")
-        holder.setLayout(head)
-        grid.addWidget(holder, row, col)
-        grid.addWidget(display or widget, row + 1, col)
-        self.fields[key] = widget
-        self.markers[key] = marker
-
-    def _build_basic(self):
-        page = QWidget()
-        page.setObjectName("transparent")
-        v = QVBoxLayout(page)
-        v.setContentsMargins(0, 0, 4, 0)
-        v.setSpacing(12)
-        card, body, grid = self._section("film", tr("card_item_basic", "Основные параметры"),
-                                         tr("card_item_basic_sub", "То же, что в карточке файла в списке"))
-        self._add_field(grid, 0, 0, "format", tr("lbl_format", "Формат"), make_combo(FORMAT_ITEMS))
-        self._add_field(grid, 0, 1, "video_codec", tr("lbl_codec", "Кодек"), make_combo(VCODEC_ITEMS))
-        self._add_field(grid, 2, 0, "resolution", tr("lbl_resolution", "Разрешение"), make_combo(RESOLUTION_ITEMS))
-        self._add_field(grid, 2, 1, "bitrate", tr("lbl_bitrate", "Битрейт"), make_combo(BITRATE_ITEMS, editable=True))
-        v.addWidget(card)
-        v.addStretch(1)
-        return page
-
-    def _build_advanced(self):
-        page = QWidget()
-        page.setObjectName("transparent")
-        v = QVBoxLayout(page)
-        v.setContentsMargins(0, 0, 4, 0)
-        v.setSpacing(12)
-
-        card, body, grid = self._section(
-            "gauge", tr("sec_quality_speed", "Качество и скорость"),
-            tr("sec_quality_speed_sub", "Точное значение заменяет профиль качества: меньше — лучше и крупнее. "
-                                        "Шкала: x264/x265 0–51, AV1/VP9 0–63, NVENC CQ 0–51."))
-        self._add_field(grid, 0, 0, "quality", tr("lbl_quality", "Качество"), make_combo(QUALITY_ITEMS))
-        self._add_field(grid, 0, 1, "crf", tr("lbl_crf", "Точное качество (CRF/CQ)"),
-                        make_combo(CRF_ITEMS, editable=True, numeric=True))
-        self._add_field(grid, 2, 0, "speed", tr("lbl_speed", "Скорость кодирования"), make_combo(SPEED_ITEMS))
-        v.addWidget(card)
-
-        card, body, grid = self._section(
-            "scissors", tr("sec_frame_trim", "Кадр и обрезка"),
-            tr("sec_frame_trim_sub", "Время: 90, 1:30 или 0:01:30.5. Без перекодирования начало режется "
-                                     "по ближайшему ключевому кадру."))
-        self._add_field(grid, 0, 0, "fps", tr("lbl_fps", "Частота кадров"), make_combo(FPS_ITEMS))
-        trim_start, trim_end = QLineEdit(), QLineEdit()
-        trim_start.setPlaceholderText("0:00")
-        dur = media_duration(self.items[0].info) if not self.group else None
-        trim_end.setPlaceholderText(format_time(dur) if dur else tr("до конца"))
-        self._add_field(grid, 2, 0, "trim_start", tr("lbl_trim_start", "Начало"), trim_start)
-        self._add_field(grid, 2, 1, "trim_end", tr("lbl_trim_end", "Конец"), trim_end)
-        v.addWidget(card)
-
-        card, body, grid = self._section("audio-lines", tr("card_vaudio", "Звук в видео"))
-        self._add_field(grid, 0, 0, "audio_codec", tr("lbl_acodec", "Кодек"), make_combo(ACODEC_ITEMS))
-        self._add_field(grid, 0, 1, "audio_bitrate", tr("lbl_abitrate", "Битрейт"),
-                        make_combo(ABITRATE_ITEMS, editable=True))
-        self._add_field(grid, 2, 0, "audio_channels", tr("lbl_achannels", "Каналы"), make_combo(ACHANNEL_ITEMS))
-        mute_row = QHBoxLayout()
-        mute_row.setSpacing(10)
-        mute = ToggleSwitch()
-        mute_row.addWidget(mute)
-        mute_row.addWidget(_set_role(QLabel(tr("lbl_mute", "Убрать звук из видео")), "rowTitle"), 1)
-        holder = QWidget()
-        holder.setObjectName("transparent")
-        holder.setLayout(mute_row)
-        self._add_field(grid, 2, 1, "mute", tr("lbl_sound", "Звук"), mute, display=holder)
-        v.addWidget(card)
-        v.addStretch(1)
-        return page
-
-    # ---- значения полей ----
-    def _get(self, key):
-        w = self.fields[key]
-        if isinstance(w, QComboBox):
-            return combo_value(w)
-        if isinstance(w, QCheckBox):
-            return w.isChecked()
-        return parse_time(w.text())
-
-    def _set(self, key, value):
-        w = self.fields[key]
-        if isinstance(w, QComboBox):
-            set_combo_value(w, value)
-        elif isinstance(w, QCheckBox):
-            w.setChecked(bool(value))
-        else:
-            w.setText(format_time(value) if value is not None else "")
-
-    def _load_values(self):
-        values = [self.owner.effective_settings(it) for it in self.items]
-        for key in self.fields:
-            vals = [v.get(key) for v in values]
-            self._set(key, vals[0])
-            self.markers[key].setVisible(self.group and any(x != vals[0] for x in vals))
-        # отслеживаем только поля, которые человек реально изменил
-        for key, w in self.fields.items():
-            if isinstance(w, QComboBox):
-                w.currentIndexChanged.connect(lambda _i, k=key: self._touch(k))
-                if w.isEditable():
-                    w.editTextChanged.connect(lambda _t, k=key: self._touch(k))
-            elif isinstance(w, QCheckBox):
-                w.toggled.connect(lambda _v, k=key: self._touch(k))
-            else:
-                w.textEdited.connect(lambda _t, k=key: self._touch(k))
-
-    def _touch(self, key):
+    # ---- правки ----
+    def _on_edit(self, key):
         self._touched.add(key)
-        self.markers[key].setVisible(False)
+        if key in TIME_KEYS:
+            return                    # время применяется после проверки, по «Применить»
+        # остальное — сразу, чтобы в списке было видно, что выбрано
+        self.owner.apply_item_settings(self.items, {key: self.form.get(key)}, self.kind)
 
     def _validate(self):
         problems = []
-        for key in ("trim_start", "trim_end"):
-            w = self.fields[key]
+        form = self.form
+        for key in TIME_KEYS:
+            w = form.fields[key]
             if key in self._touched and w.text().strip() and parse_time(w.text()) is None:
                 problems.append(tr_fmt("Не понимаю время «{t}». Пример: 1:30 или 0:01:30.5", t=w.text().strip()))
-        start, end = self._get("trim_start"), self._get("trim_end")
-        if start is not None and end is not None and end <= start:
-            problems.append(tr("Конец обрезки должен быть позже начала."))
-        crf_box = self.fields["crf"]
-        if "crf" in self._touched and crf_box.currentText().strip():
-            value = combo_value(crf_box)
-            if value is None and crf_box.currentText().strip() != tr("Авто"):
+        for key in ("bitrate", "audio_bitrate"):
+            box = form.fields.get(key)
+            if box is None or key not in self._touched:
+                continue
+            text = box.currentText().strip()
+            if text and form.get(key) is None and text != box.itemText(0):
+                problems.append(tr_fmt("Не понимаю битрейт «{t}». Пример: 2500k или 5M", t=text))
+        box = form.fields.get("crf")
+        if box is not None and "crf" in self._touched:
+            text, value = box.currentText().strip(), form.get("crf")
+            if (text and value is None and text != box.itemText(0)) or (value is not None and not 0 <= value <= 63):
                 problems.append(tr("Точное качество — целое число от 0 до 63."))
-            elif value is not None and not 0 <= value <= 63:
-                problems.append(tr("Точное качество — целое число от 0 до 63."))
+        # обрезка проверяется для каждого файла: у других файлов группы могут быть свои значения
+        changes = {k: form.get(k) for k in self._touched & set(TIME_KEYS)}
+        for it in self.items:
+            s = self.owner.effective_settings(it, self.kind)
+            s.update(changes)
+            start, end = s.get("trim_start"), s.get("trim_end")
+            name = f" ({os.path.basename(it.path)})" if self.group else ""
+            if start is not None and end is not None and end <= start:
+                problems.append(tr("Конец обрезки должен быть позже начала.") + name)
+                break
+            dur = media_duration(it.info)
+            if dur and start is not None and start >= dur:
+                problems.append(tr_fmt("Начало обрезки дальше конца файла ({d}).", d=format_time(dur)) + name)
+                break
         if problems:
             QMessageBox.warning(self, tr("Проверьте настройки"), "\n".join(problems))
             return False
         return True
 
     def changes(self):
-        return {key: self._get(key) for key in self._touched}
+        return {key: self.form.get(key) for key in self._touched}
 
     def _finish(self, render):
         if not self._validate():
             return
         changes = self.changes()
         if changes:
-            self.owner.apply_item_settings(self.items, changes)
+            self.owner.apply_item_settings(self.items, changes, self.kind)
         self.render_after = render
         self.accept()
 
+    def reject(self):
+        self.owner.restore_item_settings(self._snapshot, self.kind)
+        super().reject()
+
     def _reset(self):
-        self.owner.reset_item_settings(self.items)
+        self.owner.reset_item_settings(self.items, self.kind)
         self.accept()
 
 
@@ -3318,23 +3791,9 @@ class VideoConverter(QMainWindow):
     }
     QUALITY_NAMES = {None: "Как в исходнике", "high": "Максимальное", "balanced": "Баланс",
                      "small": "Меньший размер"}
-    QUALITY_HINTS = {
-        None: "Видео копируется без перекодирования, если формат это позволяет — мгновенно и без потерь",
-        "high": "Визуально без потерь (как CRF 18 у x264) — файл крупнее",
-        "balanced": "Качество почти неотличимо от исходника, файл заметно меньше — рекомендуем",
-        "small": "Сильнее сжатие — для отправки и хранения, мелкие детали чуть мягче",
-    }
     PAGE_VIDEO, PAGE_AUDIO, PAGE_LOGS, PAGE_SETTINGS = range(4)
     NAV_ITEMS = (("tab_video", "Видео", "clapperboard"), ("tab_audio", "Аудио", "audio-lines"),
                  ("tab_logs", "Логи", "scroll-text"), ("tab_settings", "Настройки", "settings"))
-    AUDIO_FORMAT_HINTS = {
-        "mp3": "MP3 — совместим со всем, сжатие с потерями",
-        "aac": "AAC — компактный и качественный, отлично для телефонов",
-        "flac": "FLAC — без потери качества, файл заметно больше",
-        "wav": "WAV — несжатый PCM, максимальный размер",
-        "ogg": "OGG Vorbis — открытый формат, сжатие с потерями",
-        "ac3": "AC3 — Dolby Digital, подходит для 5.1",
-    }
     MIN_W, MIN_H = 900, 620
 
     def __init__(self):
@@ -3359,6 +3818,13 @@ class VideoConverter(QMainWindow):
             self.output_dir = ""
 
         self.items = []            # MediaItem — файлы в списке
+        # общие параметры: рендер (страница «Видео») и извлечение звука («Аудио»)
+        self._globals = {"video": sanitize_settings("video", cfg.get("render_settings")),
+                         "audio": sanitize_settings("audio", cfg.get("extract_settings")
+                                                    or {"format": (cfg.get("render_settings") or {})
+                                                        .get("audio_format") or "mp3"})}
+        self.panels = {}           # kind → панель параметров на странице
+        self._settings_dlg = None  # открытое окно настроек файла (обновить после анализа)
         self.output_file = ""
         self._probe_threads = []   # фоновый анализ добавленных файлов
         self._probe_cache = {}     # (path, mtime) -> ffprobe json
@@ -3401,9 +3867,7 @@ class VideoConverter(QMainWindow):
         self.chk_open_folder.setChecked(self.settings["open_folder_when_done"])
         self.chk_sound.setChecked(self.settings["sound_notifications"])
         self.chk_ask_dest.setChecked(self.settings["ask_destination"])
-        self.restore_render_settings(cfg)
-        self._update_audio_hint()
-        self._update_quality_hint()
+        self._sync_panels()
 
         try:
             self.load_locales()
@@ -3594,7 +4058,7 @@ class VideoConverter(QMainWindow):
         lay.addWidget(self._build_files())
         # Параметры видео и аудио — переключаются видимостью, а не QStackedWidget:
         # стек учитывает высоту скрытой страницы и даёт лишнюю прокрутку
-        self.mode_pages = [self._build_video_settings(), self._build_audio_settings()]
+        self.mode_pages = [self._build_settings_panel("video"), self._build_settings_panel("audio")]
         for page in self.mode_pages:
             lay.addWidget(page)
         lay.addStretch(1)
@@ -3662,113 +4126,100 @@ class VideoConverter(QMainWindow):
         self._refresh_files_header()
         return self.source_stack
 
-    def _build_video_settings(self):
-        page = QWidget()
-        page.setObjectName("transparent")
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(12)
+    # ---- панель параметров под списком: общие или для отмеченных файлов ----
+    PANEL_TEXTS = {
+        "video": ("film", ("card_video_all", "Общие параметры видео"),
+                  ("card_video_all_sub", "Для всех файлов без своих настроек. «Как в исходнике» и «Без изменений» — "
+                                         "мгновенная перепаковка без потери качества"),
+                  ("card_video_sel", "Параметры выбранных: {n}"),
+                  ("card_video_sel_sub", "Правки сразу применяются к отмеченным файлам — смотрите их карточки. "
+                                         "Снимите отметки, чтобы изменить общие параметры.")),
+        "audio": ("music", ("card_extract", "Извлечение аудио"),
+                  ("card_extract_all_sub", "Для всех файлов без своих настроек. Отметьте файлы, чтобы задать "
+                                           "им свою дорожку, формат или фрагмент"),
+                  ("card_extract_sel", "Извлечение из выбранных: {n}"),
+                  ("card_extract_sel_sub", "Правки сразу применяются к отмеченным файлам. Снимите отметки, "
+                                           "чтобы изменить общие параметры.")),
+    }
 
-        card, body, head_right = self._card(
-            "card_video_all", "Общие параметры видео", "film", "card_video_all_sub",
-            "Для всех файлов без своих настроек. «Как в исходнике» и «Без изменений» — "
-            "мгновенная перепаковка без потери качества")
-        self.lossless_badge = Badge("zap", "")
-        self._reg(self.lossless_badge.label, "badge_lossless", "Без перекодирования")
-        self._reg(self.lossless_badge, "tip_lossless",
-                  "Видеопоток будет скопирован 1:1 — быстро и без потерь", kind="tip")
-        self.lossless_badge.setVisible(False)
-        head_right.addWidget(self.lossless_badge, 0, Qt.AlignmentFlag.AlignTop)
+    def _build_settings_panel(self, kind):
+        card = make_card()
+        v = QVBoxLayout(card)
+        v.setContentsMargins(18, 14, 18, 16)
+        v.setSpacing(14)
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        icon = self.PANEL_TEXTS[kind][0]
+        badge = IconBadge(icon)
+        self._badges.append(badge)
+        head.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        title = _set_role(QLabel(), "title")
+        sub = _set_role(QLabel(), "sub")
+        sub.setWordWrap(True)
+        col.addWidget(title)
+        col.addWidget(sub)
+        head.addLayout(col, 1)
+        if kind == "video":
+            self.lossless_badge = Badge("zap", "")
+            self._reg(self.lossless_badge.label, "badge_lossless", "Без перекодирования")
+            self._reg(self.lossless_badge, "tip_lossless",
+                      "Видеопоток будет скопирован 1:1 — быстро и без потерь", kind="tip")
+            self.lossless_badge.setVisible(False)
+            head.addWidget(self.lossless_badge, 0, Qt.AlignmentFlag.AlignTop)
+        reset = style_button(QPushButton(), "ghost")
+        self._reg(reset, "btn_reset_selected", "Вернуть общие")
+        self._reg(reset, "tip_reset_selected", "Отмеченные файлы снова следуют общим параметрам", kind="tip")
+        self._reg_icon(reset, "rotate-ccw", "muted", px=16)
+        reset.clicked.connect(lambda: self.reset_item_settings(self.selected_items(), kind))
+        head.addWidget(reset, 0, Qt.AlignmentFlag.AlignTop)
+        v.addLayout(head)
+        form = SettingsForm(kind)
+        form.edited.connect(lambda key, k=kind: self._on_panel_edit(k, key))
+        v.addWidget(form)
+        self.panels[kind] = types.SimpleNamespace(card=card, title=title, sub=sub, reset=reset, form=form)
+        return card
 
-        body.addWidget(self._label("lbl_format", "Формат", "field"))
-        self.format = self._segmented(FORMAT_ITEMS)
-        self._reg(self.format, "tip_format",
-                  "Контейнер выходного файла. «Исходный» — оставить как у исходника.", kind="tip")
-        body.addWidget(self.format)
+    def _sync_panels(self):
+        """Панели показывают общие параметры, а при отмеченных файлах — их значения."""
+        if not self.panels:
+            return
+        selected = self.selected_items()
+        for kind, panel in self.panels.items():
+            _icon, title, sub, sel_title, sel_sub = self.PANEL_TEXTS[kind]
+            if selected:
+                panel.title.setText(tr_fmt(sel_title[0], sel_title[1], n=len(selected)))
+                panel.sub.setText(tr(*sel_sub))
+                panel.form.load([self.effective_settings(it, kind) for it in selected])
+            else:
+                panel.title.setText(tr(*title))
+                panel.sub.setText(tr(*sub))
+                panel.form.load([self._globals[kind]])
+            panel.reset.setVisible(any(self.item_has_own(it, kind) for it in selected))
+        scope = selected or [it for it in self.items if it.settings is None]
+        self.lossless_badge.setVisible(bool(scope) and all(it.probed and self.item_is_copy(it) for it in scope))
 
-        body.addWidget(self._label("lbl_quality", "Качество", "field"))
-        self.quality = self._segmented(QUALITY_ITEMS)
-        self._reg(self.quality, "tip_quality",
-                  "Качество при перекодировании (CRF/CQ, как в HandBrake). "
-                  "«Как в исходнике» — без перекодирования, если возможно.", kind="tip")
-        body.addWidget(self.quality)
-        self.quality_hint = _set_role(QLabel(), "sub")
-        self.quality_hint.setWordWrap(True)
-        body.addWidget(self.quality_hint)
-        self.quality.currentIndexChanged.connect(self._update_quality_hint)
+    def _on_panel_edit(self, kind, key):
+        value = self.panels[kind].form.get(key)
+        selected = self.selected_items()
+        if selected:
+            for it in selected:
+                self.set_item_value(it, key, value, kind, notify=False)
+            self._on_user_change()
+        else:
+            self.set_global_value(kind, key, value)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(6)
-        for c in range(3):
-            grid.setColumnStretch(c, 1)
-        self.resolution = self._combo(RESOLUTION_ITEMS)
-        self.video_codec = self._combo(VCODEC_ITEMS)
-        self._reg(self.video_codec, "tip_codec",
-                  "«Без изменений» — кодек исходника. Аппаратные кодеки (NVIDIA/Intel/AMD) "
-                  "проверяются перед запуском; если не работают — берётся программный.", kind="tip")
-        self.bitrate = self._combo(BITRATE_ITEMS, editable=True)
-        self._reg(self.bitrate, "tip_bitrate",
-                  "Средний битрейт видео (напр. 2M) вместо качества. «Без изменений» — "
-                  "управлять качеством (рекомендуется).", kind="tip")
-        self._field(grid, 0, 0, "lbl_resolution", "Разрешение", self.resolution)
-        self._field(grid, 0, 1, "lbl_codec", "Кодек", self.video_codec)
-        self._field(grid, 0, 2, "lbl_bitrate", "Битрейт", self.bitrate)
-        body.addLayout(grid)
-        lay.addWidget(card)
-
-        card2, body2, _r = self._card("card_vaudio", "Звук в видео", "audio-lines", "card_vaudio_sub",
-                                      "Кодек, битрейт и каналы звуковой дорожки результата")
-        grid2 = QGridLayout()
-        grid2.setHorizontalSpacing(12)
-        grid2.setVerticalSpacing(6)
-        for c in range(3):
-            grid2.setColumnStretch(c, 1)
-        self.audio_codec = self._combo(ACODEC_ITEMS)
-        self.audio_bitrate = self._combo(ABITRATE_ITEMS, editable=True)
-        self.audio_channels = self._combo(ACHANNEL_ITEMS)
-        self._field(grid2, 0, 0, "lbl_acodec", "Кодек", self.audio_codec)
-        self._field(grid2, 0, 1, "lbl_abitrate", "Битрейт", self.audio_bitrate)
-        self._field(grid2, 0, 2, "lbl_achannels", "Каналы", self.audio_channels)
-        body2.addLayout(grid2)
-        lay.addWidget(card2)
-        lay.addStretch(1)
-        return page
-
-    def _build_audio_settings(self):
-        page = QWidget()
-        page.setObjectName("transparent")
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(12)
-        card, body, _r = self._card("card_extract", "Извлечение аудио", "music", "card_extract_sub",
-                                    "Сохраните звуковую дорожку видео в отдельный файл")
-        body.addWidget(self._label("lbl_aformat", "Формат аудио", "field"))
-        self.audio_format = self._segmented([(f.upper(), f) for f in
-                                             ("mp3", "aac", "flac", "wav", "ogg", "ac3")])
-        body.addWidget(self.audio_format)
-        hint_row = QHBoxLayout()
-        hint_row.setSpacing(8)
-        self.audio_hint_icon = QLabel()
-        self.audio_hint_icon.setFixedSize(16, 16)
-        hint_row.addWidget(self.audio_hint_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.audio_hint = _set_role(QLabel(), "sub")
-        self.audio_hint.setWordWrap(True)
-        hint_row.addWidget(self.audio_hint, 1)
-        body.addLayout(hint_row)
-        self.audio_format.currentIndexChanged.connect(self._update_audio_hint)
-        lay.addWidget(card)
-        lay.addStretch(1)
-        return page
-
-    def _update_quality_hint(self, *_):
-        level = self.quality.currentData()
-        self.quality_hint.setText(tr(f"qhint_{level or 'source'}", self.QUALITY_HINTS.get(level, "")))
-
-    def _update_audio_hint(self, *_):
-        fmt = self.audio_format.currentData() or ""
-        self.audio_hint.setText(tr(f"afmt_{fmt}", self.AUDIO_FORMAT_HINTS.get(fmt, "")))
-        self.audio_hint_icon.setPixmap(icon_pixmap("info", T.COLOR_TEXT_MUTED, 16, 2.0))
+    def set_global_value(self, kind, key, value):
+        if self._globals[kind].get(key) == value:
+            return
+        self._globals[kind][key] = value
+        self._save_render_settings()
+        # карточки «без своих настроек» сразу показывают новое значение
+        attr = self._SETTINGS_ATTR[kind]
+        for it in self.items:
+            if it.card is not None and getattr(it, attr) is None:
+                it.card.refresh()
         self._on_user_change()
 
     # ---- журнал ----
@@ -3891,6 +4342,7 @@ class VideoConverter(QMainWindow):
         self.hue_slider.setMinimumWidth(230)
         self.hue_slider.valueChanged.connect(self._on_hue_changed)
         self.hue_slider.sliderReleased.connect(lambda: save_config(hue=self.hue_slider.value()))
+        self.hue_slider.sliderReleased.connect(self._schedule_theme)
         self.hue_swatch = _set_role(QLabel(), "swatch")
         self.hue_swatch.setFixedSize(24, 24)
         self.color_pick_btn = style_button(QPushButton(), "icon")
@@ -3907,6 +4359,7 @@ class VideoConverter(QMainWindow):
         self.sat_slider.setMinimumWidth(230)
         self.sat_slider.valueChanged.connect(self._on_sat_changed)
         self.sat_slider.sliderReleased.connect(lambda: save_config(saturation=self.sat_slider.value()))
+        self.sat_slider.sliderReleased.connect(self._schedule_theme)
         self.sat_value = _set_role(QLabel(f"{T.CURRENT_SATURATION}%"), "pill")
         self.sat_value.setFixedWidth(56)
         self.sat_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -4062,6 +4515,9 @@ class VideoConverter(QMainWindow):
 
     # ------------------------------------------------------------- Тема ----
     def _schedule_theme(self):
+        # пока ползунок тянут — перекрашиваем реже: стиль применяется ко всем карточкам
+        dragging = self.hue_slider.isSliderDown() or self.sat_slider.isSliderDown()
+        self._theme_timer.setInterval(220 if dragging else 30)
         self._theme_timer.start()
 
     def _apply_theme(self):
@@ -4081,7 +4537,10 @@ class VideoConverter(QMainWindow):
                 it.card.refresh_icons()
         self._rebuild_icons()
         self._refresh_status_icon()
-        self._update_audio_hint_icon()
+        for panel in self.panels.values():
+            panel.form.refresh_icons()
+        if self._settings_dlg is not None:
+            self._settings_dlg.form.refresh_icons()
         self._refresh_theme_toggle()
         self.banner.update()
         apply_window_theme(self)
@@ -4137,9 +4596,6 @@ class VideoConverter(QMainWindow):
             (self.color_pick_btn, 'pipette', 'secondary'),
         ):
             self._reg_icon(w, kind, role)
-
-    def _update_audio_hint_icon(self):
-        self.audio_hint_icon.setPixmap(icon_pixmap("info", T.COLOR_TEXT_MUTED, 16, 2.0))
 
     def _refresh_theme_toggle(self):
         dark = T.CURRENT_DARK
@@ -4236,7 +4692,10 @@ class VideoConverter(QMainWindow):
 
     def _on_user_change(self, *_):
         """Любое действие пользователя сбрасывает «Готово!» и обновляет сводку."""
-        if not getattr(self, '_ui_ready', False) or self._busy:
+        if not getattr(self, '_ui_ready', False):
+            return
+        self._sync_panels()
+        if self._busy:
             return
         self._status_sticky = False
         self._update_summary()
@@ -4248,6 +4707,8 @@ class VideoConverter(QMainWindow):
                 or s.get("crf") is not None or s.get("fps")):
             return False
         in_ext = os.path.splitext(path)[1].lstrip(".").lower()
+        if s.get("trim_start") and in_ext in SEEK_UNSAFE_EXTS:
+            return False          # у TS/MPEG-PS нет надёжных ключевых кадров — копия была бы битой
         if out_ext is None:
             fmt = (s.get("format") or "").lower()
             out_ext = fmt if fmt in self.KNOWN_CONTAINERS else (in_ext or "mp4")
@@ -4257,16 +4718,23 @@ class VideoConverter(QMainWindow):
             return allowed is None or v['codec_name'] in allowed
         return out_ext in (in_ext, "mkv")
 
-    def item_is_copy(self, item):
-        return self._video_copy_planned(self.effective_settings(item), item.path, item.info)
-
-    def _is_lossless(self):
-        """Все файлы, что следуют общим параметрам, копируются без перекодирования."""
-        following = [it for it in self.items if it.settings is None]
-        if not following:
+    def _extract_copy_planned(self, s, info):
+        """Будет ли звук скопирован без перекодирования (как в _build_extract_command)."""
+        tracks = audio_tracks(info)
+        if not tracks or s.get("bitrate") or s.get("channels") or s.get("sample_rate") or s.get("normalize"):
             return False
-        glob = self.current_render_settings()
-        return all(self._video_copy_planned(glob, it.path, it.info) for it in following)
+        index = s.get("track") or 0
+        src = (tracks[index if index < len(tracks) else 0].get('codec_name') or '').lower()
+        return self._extract_copies(s.get("format") or "mp3", src)
+
+    def _extract_copies(self, fmt, src):
+        copy_codec = self.EXTRACT_FORMATS.get(fmt, (None, None))[0]
+        return bool(src) and (src == copy_codec or (fmt == "ogg" and src in ("vorbis", "opus")))
+
+    def item_is_copy(self, item, kind="video"):
+        if kind == "audio":
+            return self._extract_copy_planned(self.effective_settings(item, "audio"), item.info)
+        return self._video_copy_planned(self.effective_settings(item), item.path, item.info)
 
     @staticmethod
     def _item_label(items, value):
@@ -4299,16 +4767,16 @@ class VideoConverter(QMainWindow):
         return " · ".join(parts)
 
     def _update_summary(self, *_):
-        if not hasattr(self, "lossless_badge"):
+        if not hasattr(self, "batch_status_label"):
             return
-        self.lossless_badge.setVisible(self._is_lossless())
         if self._busy or self._status_sticky:
             return
         items = self._scope_items()
         if not items:
             text = tr("Добавьте видео, чтобы начать")
         elif self._page == self.PAGE_AUDIO:
-            fmt = (self.audio_format.currentData() or "").upper()
+            formats = {(self.effective_settings(it, "audio").get("format") or "mp3") for it in items}
+            fmt = formats.pop().upper() if len(formats) == 1 else tr("разные форматы")
             text = (tr_fmt("Звук из «{name}» → {fmt}", name=os.path.basename(items[0].path), fmt=fmt)
                     if len(items) == 1 else tr_fmt("Звук из {n} файлов → {fmt}", n=len(items), fmt=fmt))
         else:
@@ -4384,59 +4852,12 @@ class VideoConverter(QMainWindow):
             self._hw_cache.clear()
             self.refresh_ffmpeg_label()
 
-    # ------------------------------------------------- Значения комбо ------
-    @staticmethod
-    def _combo_editable_value(combo):
-        txt = combo.currentText().strip()
-        if not txt:
-            return None
-        token = txt.split()[0]
-        return token if _BITRATE_RE.match(token) else None
-
+    # ------------------------------------------------- Общие параметры -----
     def current_render_settings(self):
-        return {
-            "resolution": self.resolution.currentData(),
-            "video_codec": self.video_codec.currentData(),
-            "bitrate": self._combo_editable_value(self.bitrate),
-            "format": self.format.currentData(),
-            "quality": self.quality.currentData(),
-            "audio_codec": self.audio_codec.currentData(),
-            "audio_bitrate": self._combo_editable_value(self.audio_bitrate),
-            "audio_channels": self.audio_channels.currentData(),
-            "audio_format": self.audio_format.currentData(),
-            **DEFAULT_ADVANCED,   # расширенные — только у файлов со своими настройками
-        }
+        return dict(self._globals["video"])
 
-    @staticmethod
-    def _restore_combo(combo, value, editable=False):
-        if value is None:
-            combo.setCurrentIndex(0)
-            return
-        for i in range(combo.count()):
-            if combo.itemData(i) == value:
-                combo.setCurrentIndex(i)
-                return
-        if editable:
-            i = combo.findText(str(value))
-            if i >= 0:
-                combo.setCurrentIndex(i)
-            else:
-                combo.setEditText(str(value))
-
-    def restore_render_settings(self, cfg):
-        saved = cfg.get("render_settings") or {}
-        if not isinstance(saved, dict):
-            return
-        self._restore_combo(self.resolution, saved.get("resolution"))
-        self._restore_combo(self.video_codec, saved.get("video_codec"))
-        self._restore_combo(self.bitrate, saved.get("bitrate"), editable=True)
-        self._restore_combo(self.format, saved.get("format"))
-        self._restore_combo(self.quality, saved.get("quality"))
-        self._restore_combo(self.audio_codec, saved.get("audio_codec"))
-        self._restore_combo(self.audio_bitrate, saved.get("audio_bitrate"), editable=True)
-        self._restore_combo(self.audio_channels, saved.get("audio_channels"))
-        if saved.get("audio_format"):
-            self._restore_combo(self.audio_format, saved.get("audio_format"))
+    def current_extract_settings(self):
+        return dict(self._globals["audio"])
 
     # ----------------------------------------------- Автосохранение --------
     def _save_setting(self, key, value):
@@ -4446,9 +4867,10 @@ class VideoConverter(QMainWindow):
             save_config(**{key: bool(value)})
 
     def _save_render_settings(self, *_args):
-        """Параметры кодирования: сохраняются при каждом изменении."""
+        """Общие параметры рендера и извлечения: сохраняются при каждом изменении."""
         if getattr(self, '_ui_ready', False):
-            save_config(render_settings=self.current_render_settings())
+            save_config(render_settings=self.current_render_settings(),
+                        extract_settings=self.current_extract_settings())
 
     def _on_locale_changed(self):
         if not getattr(self, '_ui_ready', False):
@@ -4465,14 +4887,6 @@ class VideoConverter(QMainWindow):
                          (self.chk_sound, 'sound_notifications'),
                          (self.chk_ask_dest, 'ask_destination')):
             chk.toggled.connect(lambda v, k=key: self._save_setting(k, v))
-        for combo in (self.resolution, self.video_codec, self.bitrate, self.format, self.quality,
-                      self.audio_codec, self.audio_bitrate, self.audio_channels,
-                      self.audio_format):
-            combo.currentIndexChanged.connect(self._save_render_settings)
-            combo.currentIndexChanged.connect(self._on_global_change)
-            if combo.isEditable():
-                combo.editTextChanged.connect(self._save_render_settings)
-                combo.editTextChanged.connect(self._on_global_change)
 
     # ------------------------------------------------------- Локализация ---
     def load_locales(self):
@@ -4551,9 +4965,10 @@ class VideoConverter(QMainWindow):
         for it in self.items:
             if it.card is not None:
                 it.card.retranslate()
+        for panel in self.panels.values():
+            panel.form.retranslate()
+        self._sync_panels()
         self._refresh_output_dir_label()
-        self._update_audio_hint()
-        self._update_quality_hint()
         self._refresh_theme_toggle()
         self._refresh_files_header()
         self._update_summary()
@@ -4607,6 +5022,7 @@ class VideoConverter(QMainWindow):
         thread.probed.connect(self._on_probed)
         thread.finished.connect(lambda t=thread: self._probe_threads.remove(t)
                                 if t in self._probe_threads else None)
+        thread.finished.connect(thread.deleteLater)
         self._probe_threads.append(thread)
         thread.start()
 
@@ -4631,11 +5047,16 @@ class VideoConverter(QMainWindow):
                 it.probed = True
                 if it.card is not None:
                     it.card.refresh()
-        self._update_summary()
+                if self._settings_dlg is not None:
+                    self._settings_dlg.item_probed(it)
+        self._on_user_change()
 
     def remove_items(self, items):
         if self._busy:
             return
+        removed = {it.path for it in items if it in self.items}
+        for t in self._probe_threads:      # убранные файлы больше не анализируем
+            t.skip |= removed
         for it in list(items):
             if it in self.items:
                 self.items.remove(it)
@@ -4698,11 +5119,12 @@ class VideoConverter(QMainWindow):
         self.files_title.setText(tr_fmt("Выбрано: {k} из {n}", k=k, n=n) if k
                                  else tr_fmt("Файлов: {n}", n=n))
         self.files_hint.setText(
-            tr("files_hint_audio", "Отметьте файлы, чтобы извлечь звук только из них; без отметок — из всех.")
+            tr("files_hint_audio2", "У каждого файла — свой формат, битрейт и дорожка; «Настроить» — фрагмент "
+                                    "и обработка. Отметьте файлы, чтобы извлечь звук только из них.")
             if audio else
-            tr("files_hint", "Нажмите на превью или «Настроить», чтобы открыть все параметры файла. "
-                             "Отметьте несколько — чтобы настроить их вместе."))
-        self.btn_edit_selected.setVisible(k > 0 and not audio)
+            tr("files_hint2", "Нажмите на превью или «Настроить», чтобы открыть все параметры файла. "
+                              "Отметьте несколько — их можно настроить вместе в панели ниже или в отдельном окне."))
+        self.btn_edit_selected.setVisible(k > 0)
         self.btn_remove_selected.setVisible(k > 0)
         for attr, key, text in self.TOOLBAR:   # в узком окне — только иконки (подсказки остаются)
             getattr(self, attr).setText("" if self._compact else " " + tr(key, text))
@@ -4721,37 +5143,71 @@ class VideoConverter(QMainWindow):
         self.btn_extract.setText(" " + (tr_fmt("Извлечь из выбранных: {n}", n=k) if k
                                         else tr("btn_extract", "Извлечь аудио")))
 
-    # ---- свои настройки файла ----
-    def effective_settings(self, item):
-        return dict(item.settings) if item.settings is not None else self.current_render_settings()
+    # ---- свои настройки файла (kind: "video" — рендер, "audio" — извлечение) ----
+    _SETTINGS_ATTR = {"video": "settings", "audio": "extract"}
 
-    def set_item_value(self, item, key, value):
-        """Быстрая настройка из карточки: файл получает свои настройки."""
-        if item.settings is None:
-            glob = self.current_render_settings()
-            if glob.get(key) == value:
+    def _page_kind(self):
+        return "audio" if self._page == self.PAGE_AUDIO else "video"
+
+    def own_settings(self, item, kind="video"):
+        """Копия своих настроек файла или None (следует общим)."""
+        own = getattr(item, self._SETTINGS_ATTR[kind])
+        return dict(own) if own is not None else None
+
+    def item_has_own(self, item, kind="video"):
+        return getattr(item, self._SETTINGS_ATTR[kind]) is not None
+
+    def effective_settings(self, item, kind="video"):
+        own = getattr(item, self._SETTINGS_ATTR[kind])
+        return dict(own) if own is not None else dict(self._globals[kind])
+
+    def _items_changed(self, items):
+        for it in items:
+            if it.card is not None:
+                it.card.refresh()
+        self._on_user_change()
+
+    def set_item_value(self, item, key, value, kind="video", notify=True):
+        """Быстрая настройка из карточки или панели: файл получает свои настройки."""
+        attr = self._SETTINGS_ATTR[kind]
+        own = getattr(item, attr)
+        if own is None:
+            if self._globals[kind].get(key) == value:
                 return
-            item.settings = glob
-        item.settings[key] = value
+            own = dict(self._globals[kind])
+            setattr(item, attr, own)
+        own[key] = value
         if item.card is not None:
             item.card.refresh()
-        self._on_user_change()
+        if notify:
+            self._on_user_change()
 
-    def apply_item_settings(self, items, changes):
+    def apply_item_settings(self, items, changes, kind="video"):
+        attr = self._SETTINGS_ATTR[kind]
         for it in items:
-            base = dict(it.settings) if it.settings is not None else self.current_render_settings()
-            base.update(changes)
-            it.settings = base
-            if it.card is not None:
-                it.card.refresh()
-        self._on_user_change()
+            own = getattr(it, attr)
+            if own is None:
+                glob = self._globals[kind]
+                if all(glob.get(k) == v for k, v in changes.items()):
+                    continue          # и так совпадает с общими — не плодим «свои настройки»
+                own = dict(glob)
+            else:
+                own = dict(own)
+            own.update(changes)
+            setattr(it, attr, own)
+        self._items_changed(items)
 
-    def reset_item_settings(self, items):
+    def restore_item_settings(self, snapshot, kind="video"):
+        """«Отмена» в окне настроек: вернуть файлам настройки, какими они были."""
+        attr = self._SETTINGS_ATTR[kind]
+        for it, own in snapshot:
+            setattr(it, attr, dict(own) if own is not None else None)
+        self._items_changed([it for it, _own in snapshot])
+
+    def reset_item_settings(self, items, kind="video"):
         for it in items:
-            it.settings = None
-            if it.card is not None:
-                it.card.refresh()
-        self._on_user_change()
+            setattr(it, self._SETTINGS_ATTR[kind], None)
+        self._items_changed(items)
 
     def open_item_settings(self, item):
         self._open_settings([item])
@@ -4762,20 +5218,19 @@ class VideoConverter(QMainWindow):
             self._open_settings(items)
 
     def _open_settings(self, items):
-        dlg = FileSettingsDialog(self, items, self)
-        if dlg.exec() and dlg.render_after:
-            self.start_video_render(items=[it for it in dlg.items if it in self.items])
-
-    def _refresh_cards(self, following_only=False):
-        for it in self.items:
-            if it.card is not None and (not following_only or it.settings is None):
-                it.card.refresh()
-
-    def _on_global_change(self, *_):
-        """Общие параметры изменились — карточки «без своих настроек» показывают их."""
-        if getattr(self, '_ui_ready', False):
-            self._refresh_cards(following_only=True)
-        self._on_user_change()
+        kind = self._page_kind()
+        dlg = FileSettingsDialog(self, items, kind, self)
+        self._settings_dlg = dlg
+        try:
+            accepted = dlg.exec()
+        finally:
+            self._settings_dlg = None
+        if accepted and dlg.render_after:
+            targets = [it for it in dlg.items if it in self.items]
+            if kind == "audio":
+                self.extract_audio(items=targets)
+            else:
+                self.start_video_render(items=targets)
 
     # ---- перетаскивание ----
     def _set_drag_active(self, active):
@@ -5060,6 +5515,7 @@ class VideoConverter(QMainWindow):
         for it in self.items:
             if it.card is not None:
                 it.card.btn_remove.setEnabled(not busy)
+                it.card.btn_extract.setEnabled(not busy)
         if busy:
             self.stats_label.setText("")
 
@@ -5174,11 +5630,7 @@ class VideoConverter(QMainWindow):
         src_ch = self._safe_int(a0.get('channels')) or 0
 
         cmd = [ffmpeg_cmd, '-hide_banner', '-nostdin', '-y']
-        if trim_start:
-            cmd += ['-ss', f'{trim_start:.3f}']          # быстрый переход до чтения файла
-        cmd += ['-i', input_file]
-        if trim_end is not None and trim_end > (trim_start or 0):
-            cmd += ['-t', f'{trim_end - (trim_start or 0):.3f}']
+        cmd += self._trim_args(input_file, in_ext, trim_start, trim_end)[0]
 
         # --- какие потоки берём: в MKV — все дорожки звука и субтитры, иначе
         #     основное видео и первую дорожку (субтитры MP4/AVI часто ломают запись)
@@ -5186,7 +5638,10 @@ class VideoConverter(QMainWindow):
             cmd += ['-map', '0:V:0?']
             if not mute:
                 cmd += ['-map', '0:a?'] if container == 'mkv' else ['-map', '0:a:0?']
-            if container == 'mkv' and sstreams:
+            if container == 'mkv' and sstreams and trim_end is not None:
+                # субтитр, начатый до конца фрагмента, растянул бы файл до своего конца
+                notes.append(tr("ℹ При обрезке субтитры не переносятся."))
+            elif container == 'mkv' and sstreams:
                 codecs = {(s.get('codec_name') or '').lower() for s in sstreams}
                 if codecs <= MKV_SUBTITLES:
                     cmd += ['-map', '0:s?', '-c:s', 'copy']
@@ -5226,6 +5681,10 @@ class VideoConverter(QMainWindow):
                 filters.append(f"fps={fps}")
             if filters:
                 cmd += ['-vf', ",".join(filters)]
+            if trim_start:
+                # скопированный звук не тянет пакеты до точки обрезки (иначе в MKV/WebM
+                # видео начнётся на пару секунд позже звука)
+                cmd += ['-copypriorss', '0']
             how = bitrate or (f"CRF {crf}" if crf is not None else tr(self.QUALITY_NAMES.get(quality, quality)))
             notes.append(tr_fmt("🎬 Видео: {enc} · {how}", enc=enc, how=how))
 
@@ -5242,33 +5701,108 @@ class VideoConverter(QMainWindow):
         cmd.append(output_file)
         return cmd, notes
 
+    @staticmethod
+    def _trim_args(input_file, in_ext, start, end, as_filter=False):
+        """-ss/-i/-t для фрагмента → (аргументы, фильтр atrim или None).
+        Обычно переход до -i (быстро); для TS/MPEG-PS — грубый переход с запасом 20 с
+        и точный после -i (иначе случайный кадр). as_filter=True — точная часть
+        делается фильтром atrim (loudnorm с выходным -t теряет хвост звука)."""
+        args, rest = [], 0.0
+        if start and in_ext in SEEK_UNSAFE_EXTS:
+            pre = max(0.0, start - 20.0)
+            if pre:
+                args += ['-ss', f'{pre:.3f}']
+            args += ['-i', input_file]
+            rest = start - pre
+        else:
+            if start:
+                args += ['-ss', f'{start:.3f}']
+            args += ['-i', input_file]
+        length = end - (start or 0) if end is not None and end > (start or 0) else None
+        if as_filter:
+            parts = ([f'start={rest:.3f}'] if rest else []) + ([f'duration={length:.3f}'] if length else [])
+            return args, (f"atrim={':'.join(parts)},asetpts=PTS-STARTPTS" if parts else None)
+        if rest:
+            args += ['-ss', f'{rest:.3f}']
+        if length:
+            args += ['-t', f'{length:.3f}']
+        return args, None
+
     EXTRACT_FORMATS = {   # формат файла → (кодек, при котором можно копировать; энкодер)
         "mp3": ("mp3", "libmp3lame"), "aac": ("aac", "aac"), "flac": ("flac", "flac"),
-        "wav": ("pcm_s16le", "pcm_s16le"), "ogg": ("vorbis", "libvorbis"), "ac3": ("ac3", "ac3"),
+        "wav": ("pcm_s16le", "pcm_s16le"), "ogg": ("vorbis", "libvorbis"), "opus": ("opus", "libopus"),
+        "ac3": ("ac3", "ac3"),
     }
+    # частоты, которые энкодер принимает (остальные — любые)
+    ENCODER_RATES = {"libopus": (48000, 24000, 16000, 12000, 8000), "ac3": (48000, 44100, 32000),
+                     "libmp3lame": (48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000)}
 
-    def _build_extract_command(self, source, output_file, fmt, ffmpeg_cmd):
-        """Команда извлечения звука; None — в файле нет звуковой дорожки."""
+    def _build_extract_command(self, source, output_file, settings, ffmpeg_cmd):
+        """Команда извлечения звука; None — в файле нет звуковой дорожки.
+        settings: формат, битрейт, каналы, частота, дорожка, нормализация, фрагмент."""
         notes = []
+        s = dict(EXTRACT_DEFAULTS, **(settings or {}))
+        fmt = (s.get("format") or "mp3").lower()
         info = self._probe(source)
         astreams = self._streams(info, 'audio')
         if info and not astreams:
             return None, notes
-        a0 = astreams[0] if astreams else {}
-        src = (a0.get('codec_name') or '').lower()
-        ch = self._safe_int(a0.get('channels')) or 0
+        track = s.get("track") or 0
+        if astreams and track >= len(astreams):
+            notes.append(tr_fmt("⚠ Дорожки {n} нет — берём первую.", n=track + 1))
+            track = 0
+        a = astreams[track] if astreams else {}
+        src = (a.get('codec_name') or '').lower()
+        ch = self._safe_int(a.get('channels')) or 0
+        src_rate = self._safe_int(a.get('sample_rate'))
+        bitrate = None if fmt in LOSSLESS_AUDIO else s.get("bitrate")
+        channels = self._safe_int(s.get("channels"))
+        rate = self._safe_int(s.get("sample_rate"))
+        normalize = bool(s.get("normalize"))
+        in_ext = os.path.splitext(source)[1].lstrip(".").lower()
+
+        cmd = [ffmpeg_cmd, '-hide_banner', '-nostdin', '-y']
+        trim_args, atrim = self._trim_args(source, in_ext, s.get("trim_start"), s.get("trim_end"),
+                                           as_filter=normalize)
+        cmd += trim_args
+        cmd += ['-map', f'0:a:{track}', '-vn', '-sn', '-dn']
+        if len(astreams) > 1:
+            notes.append(tr_fmt("🎧 Дорожка: {t}", t=track_label(track, a)))
         copy_codec, enc = self.EXTRACT_FORMATS.get(fmt, (None, self.map_audio_codec(ffmpeg_cmd, fmt)))
-        cmd = [ffmpeg_cmd, '-hide_banner', '-nostdin', '-y', '-i', source,
-               '-map', '0:a:0', '-vn', '-sn', '-dn']
-        if src and (src == copy_codec or (fmt == "ogg" and src in ("vorbis", "opus"))):
+        if not (bitrate or channels or rate or normalize) and self._extract_copies(fmt, src):
             cmd += ['-c:a', 'copy']           # дорожка уже в нужном формате — без потерь
             notes.append(tr("⚡ Звук копируется без перекодирования."))
         else:
             if not self._has_encoder(ffmpeg_cmd, enc):
                 enc = self.map_audio_codec(ffmpeg_cmd, fmt)
-            cmd += audio_encode_args(enc, "high", None, ch)
-            if enc == 'libmp3lame' and ch > 2:
-                cmd += ['-ac', '2']
+            out_ch = channels or ch
+            if enc == 'libmp3lame' and out_ch > 2:
+                out_ch, channels = 2, 2       # MP3 — только моно/стерео
+            cmd += audio_encode_args(enc, "high", bitrate, out_ch)
+            if channels:
+                cmd += ['-ac', str(channels)]
+            filters = [atrim] if atrim else []
+            if normalize:
+                # EBU R128: -16 LUFS — громкость как у стримингов, без клиппинга
+                filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+                notes.append(tr("🔊 Громкость выравнивается (EBU R128)."))
+            if enc == 'libopus' and out_ch > 2 and not channels:
+                filters.append("aformat=channel_layouts=7.1|5.1|stereo|mono")
+            if filters:
+                cmd += ['-af', ",".join(filters)]
+            # loudnorm внутри работает на 192 кГц — частоту задаём явно
+            want = rate or (src_rate if normalize else None)
+            allowed = self.ENCODER_RATES.get(enc)
+            if want and allowed and want not in allowed:
+                new = 48000 if 48000 in allowed else allowed[0]
+                if rate:
+                    notes.append(tr_fmt("⚠ {f} не поддерживает {a} Гц — будет {b} Гц.",
+                                        f=fmt.upper(), a=want, b=new))
+                want = new
+            elif normalize and not want:
+                want = 48000
+            if want:
+                cmd += ['-ar', str(want)]
         cmd.append(output_file)
         return cmd, notes
 
@@ -5302,7 +5836,7 @@ class VideoConverter(QMainWindow):
         self._batch_dir = dest
         self._batch_cancelled = False
         self._batch_errors = 0
-        save_config(render_settings=self.current_render_settings())
+        self._save_render_settings()
         self._set_busy(True)
         self.render_next_in_batch()
 
@@ -5330,6 +5864,14 @@ class VideoConverter(QMainWindow):
         output_file = self._dest_for(input_file, ext, self._batch_dir)
         self.output_file = output_file
         ffmpeg_cmd = getattr(self, "ffmpeg_path", "ffmpeg")
+        full = media_duration(self._probe(input_file))
+        if full and (settings.get("trim_start") or 0) >= full:
+            # начало обрезки за концом файла: FFmpeg «успешно» записал бы не то
+            self.log_text.append(tr_fmt("⚠ {name}: начало обрезки дальше конца файла ({d}).",
+                                        name=os.path.basename(input_file), d=format_time(full)))
+            self.output_file = ""
+            QTimer.singleShot(0, lambda: self.batch_render_finished(False))
+            return
         cmd, notes = self._build_video_command(input_file, output_file, settings, ffmpeg_cmd)
         self.log_text.clear()
         self.log_text.append(
@@ -5339,8 +5881,7 @@ class VideoConverter(QMainWindow):
             self.log_text.append(note)
         self.log_text.append(tr("Сохранение: ") + output_file)
         self.log_text.append(tr("Команда: ") + " ".join(cmd))
-        duration = self._trimmed_duration(settings, media_duration(self._probe(input_file)))
-        self._start_worker(cmd, duration, self.batch_render_finished)
+        self._start_worker(cmd, self._trimmed_duration(settings, full), self.batch_render_finished)
 
     def batch_render_finished(self, success):
         if not success:
@@ -5394,8 +5935,8 @@ class VideoConverter(QMainWindow):
         dest = self._ask_destination()
         if dest is None:
             return
-        self.extract_batch = [it.path for it in with_audio]
-        self.extract_fmt = (self.audio_format.currentData() or self.audio_format.currentText()).lower()
+        # снимок настроек каждого файла: правки во время извлечения не влияют на пакет
+        self.extract_batch = [(it.path, self.effective_settings(it, "audio")) for it in with_audio]
         self.extract_index = 0
         self._extract_dir = dest
         self._extract_ok = 0
@@ -5411,9 +5952,10 @@ class VideoConverter(QMainWindow):
         ffmpeg_cmd = getattr(self, "ffmpeg_path", "ffmpeg")
         total = len(self.extract_batch)
         while self.extract_index < total:
-            source = self.extract_batch[self.extract_index]
-            output_file = self._dest_for(source, "." + self.extract_fmt, self._extract_dir)
-            cmd, notes = self._build_extract_command(source, output_file, self.extract_fmt, ffmpeg_cmd)
+            source, settings = self.extract_batch[self.extract_index]
+            fmt = (settings.get("format") or "mp3").lower()
+            output_file = self._dest_for(source, "." + fmt, self._extract_dir)
+            cmd, notes = self._build_extract_command(source, output_file, settings, ffmpeg_cmd)
             if cmd is None:
                 self.log_text.append(tr_fmt("Пропуск — нет звука: {name}", name=os.path.basename(source)))
                 self._extract_skipped += 1
@@ -5429,7 +5971,8 @@ class VideoConverter(QMainWindow):
                 self.log_text.append(note)
             self.log_text.append(tr("Сохранение: ") + output_file)
             self.log_text.append(tr("Команда: ") + " ".join(cmd))
-            self._start_worker(cmd, media_duration(self._probe(source)), self.audio_extraction_finished)
+            duration = self._trimmed_duration(settings, media_duration(self._probe(source)))
+            self._start_worker(cmd, duration, self.audio_extraction_finished)
             return
         self._finish_extract()
 
@@ -5455,6 +5998,11 @@ class VideoConverter(QMainWindow):
         output_file = self._extract_output
         self.stats_label.setText(os.path.dirname(output_file) if output_file else "")
         tail = tr_fmt("  ·  без звука: {n}", n=self._extract_skipped) if self._extract_skipped else ""
+        if not self._extract_ok and not self._batch_errors:
+            # всё пропущено: звука не оказалось (анализ ещё не успел это показать)
+            self._set_status(tr("В выбранных файлах нет звука"), "error", sticky=True)
+            QMessageBox.warning(self, tr("Ошибка"), tr("В этом видео нет звуковой дорожки."))
+            return
         if self._batch_errors:
             self._set_status(tr_fmt("Завершено, ошибок: {n}", n=self._batch_errors) + tail, "error", sticky=True)
             if not self._extract_ok:
@@ -5474,9 +6022,11 @@ class VideoConverter(QMainWindow):
 
     def closeEvent(self, event):
         save_config(win_size=[self.width(), self.height()])
-        for t in list(self._probe_threads):
-            t.stop()
-            t.wait(3000)
+        threads = list(self._probe_threads)
+        for t in threads:
+            t.stop()               # убивает текущий ffprobe/ffmpeg — ждать недолго
+        for t in threads:
+            t.wait()
         for w in [getattr(self, "worker", None)] + list(self._retired_workers):
             if w is not None and w.isRunning():
                 try:
