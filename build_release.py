@@ -7,6 +7,8 @@ build_release.py — собирает готовые артефакты CineConv
   2) CineConvert-portable.zip   — exe + встроенный FFmpeg + locales; работает
                                   сразу и офлайн, «из коробки».
 
+Шрифт Inter (fonts/, SIL OFL 1.1) вшивается в exe вместе с locales.
+
 Требуется: PyInstaller (pip install pyinstaller). Для портативной сборки —
 папка ffmpeg/bin рядом (ffmpeg.exe, ffprobe.exe).
 
@@ -33,6 +35,7 @@ def run_pyinstaller():
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
            "--onefile", "--windowed", "--name", NAME,
            "--add-data", f"{os.path.join(SRC, 'locales')}{SEP}locales",
+           "--add-data", f"{os.path.join(SRC, 'fonts')}{SEP}fonts",
            "--distpath", DIST, "--workpath", WORK, "--specpath", WORK]
     icon = os.path.join(SRC, "app.ico")
     if os.path.exists(icon):
@@ -58,6 +61,9 @@ def assemble():
     os.makedirs(os.path.join(port, "ffmpeg", "bin"), exist_ok=True)
     shutil.copy2(exe_path, os.path.join(port, EXE))
     shutil.copytree(os.path.join(SRC, "locales"), os.path.join(port, "locales"))
+    notices = os.path.join(SRC, "THIRD_PARTY_NOTICES.md")
+    if os.path.exists(notices):
+        shutil.copy2(notices, os.path.join(port, "THIRD_PARTY_NOTICES.md"))
     ff_src = os.path.join(SRC, "ffmpeg", "bin")
     for base in ("ffmpeg", "ffprobe"):
         s = os.path.join(ff_src, base + (".exe" if sys.platform == "win32" else ""))
