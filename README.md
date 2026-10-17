@@ -38,10 +38,10 @@
 | | Feature | Description |
 |---|---|---|
 | 🗂 | **File list** | Every file gets a card: preview, format · resolution · codec · bitrate · duration · size, and quick combos to change format / resolution / codec / bitrate **for that file only** |
-| 🔬 | **Per-file settings** | Click a preview or "Settings" to drill into one video: its full characteristics card plus **Basic** and **Advanced** tabs |
-| 🎛 | **Common settings panel** | Below the list: **Basic** (format, quality, resolution, codec, bitrate) and **Advanced** (exact CRF/CQ, speed, frame rate, audio in the video, mute) tabs for every file that has no settings of its own |
-| ☑ | **Selected files** | Tick files and the same panel edits **only them** — every change shows up on their cards at once. "Set up selected" opens a window with both tabs plus trimming; only the fields you change are applied, "mixed" marks where files differ, Cancel puts everything back. Render / extract then works on the ticked files |
-| 🧪 | **Advanced options** | Quality preset, exact CRF/CQ, encoding speed, frame rate, trim (start/end), audio codec/bitrate/channels, remove audio |
+| 🔬 | **Per-file settings** | Click a preview or "Settings" to open a compact window for one video: preview, key characteristics and **Basic** / **Advanced** tabs |
+| 🎛 | **Common settings** | The main page shows only the file list. "Common settings" in the bottom bar opens the same window for every file without its own settings: **Basic** (format, quality, resolution, codec, bitrate) and **Advanced** (exact CRF/CQ, speed, audio in the video, mute). Changes show up on the cards at once, Cancel puts everything back |
+| ☑ | **Selected files** | Tick files → "Set up selected" opens the window for all of them; only the fields you change are applied, "mixed" marks where files differ. Render / extract then works on the ticked files |
+| 🧪 | **Advanced options** | Quality preset, exact CRF/CQ, encoding speed, audio codec/bitrate/channels, remove audio |
 | 🔢 | **Bitrate presets** | Video bitrate from a list of 1000k…10000k in 1000k steps, or type your own (a bare number means kbit/s) |
 | 🎬 | **Video conversion** | Resolution (4K→144p), codec (x264, x265, AV1, VP9, NVIDIA NVENC, Intel QSV, AMD AMF), bitrate, container (mp4, mkv, mov, avi, flv, webm) |
 | 🎚 | **Quality presets** | *As source* / *Maximum* / *Balanced* / *Smaller file* — constant-quality encoding (CRF/CQ) with per-encoder values modelled on HandBrake's built-in presets. Smaller files with no visible loss instead of FFmpeg's bare defaults |
@@ -99,9 +99,9 @@ Grab one of the two builds from [**Releases**](https://github.com/bboyJohnn/Cine
 |---|---|
 | ![File settings](docs/screen-file-settings.png) | ![Group settings](docs/screen-group-settings.png) |
 
-| Selected files: the panel edits only them | Audio extraction per file |
+| Common settings | Audio extraction per file |
 |---|---|
-| ![Selected files](docs/screen-selected.png) | ![Audio](docs/screen-audio.png) |
+| ![Common settings](docs/screen-common-settings.png) | ![Audio](docs/screen-audio.png) |
 
 | Extraction settings: track, fragment, loudness |
 |---|
