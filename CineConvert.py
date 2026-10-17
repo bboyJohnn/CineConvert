@@ -26,7 +26,7 @@ try:
         QFrame, QColorDialog, QStyledItemDelegate
     )
     from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QRectF, QSize, QPointF,
-                              QByteArray, QVariantAnimation, QEasingCurve)
+                              QByteArray, QVariantAnimation, QEasingCurve, QEvent)
     from PyQt6.QtGui import (QFont, QPixmap, QPainter, QPainterPath, QColor, QLinearGradient,
                              QRadialGradient, QIcon, QPen, QPalette, QFontDatabase,
                              QKeySequence, QShortcut, QTransform)
@@ -39,7 +39,7 @@ except ImportError:   # нет PyQt6 или он не загружается (н
         QFrame, QColorDialog, QStyledItemDelegate, QShortcut
     )
     from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QTimer, QRectF, QSize, QPointF,
-                              QByteArray, QVariantAnimation, QEasingCurve)
+                              QByteArray, QVariantAnimation, QEasingCurve, QEvent)
     from PyQt5.QtGui import (QFont, QPixmap, QPainter, QPainterPath, QColor, QLinearGradient,
                              QRadialGradient, QIcon, QPen, QPalette, QFontDatabase,
                              QKeySequence, QTransform)
@@ -3642,14 +3642,32 @@ class FileSettingsDialog(ThemedDialog):
         else:
             self.form.load([owner.effective_settings(it, kind) for it in self.items])
         self.form.edited.connect(self._on_edit)
+        self._fitted = False
         self._fit_size()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._fitted:      # стиль и переносы строк известны только при показе
+            self._fitted = True
+            self._fit_size()
+
     def _fit_size(self):
-        """Окно по содержимому: без пустого места и, если хватает экрана, без прокрутки."""
-        form = self.form
-        page_h = max(p.sizeHint().height() for p in form.pages)   # обе вкладки — одной высоты
-        m = self._card.layout().contentsMargins()
-        body = form.tabs.sizeHint().height() + form.layout().spacing() + page_h + m.top() + m.bottom() + 4
+        """Окно по содержимому: без пустого места и, если хватает экрана, без прокрутки.
+        Обе вкладки меряются по очереди — окно не прыгает при переключении."""
+        form, current = self.form, self.form.tabs.currentIndex()
+        # ширина без полосы прокрутки: после подгонки её не будет
+        width = max(self._scroll.width() if self.isVisible() else self._scroll.viewport().width(), 1)
+        body = 0
+        for i in range(len(form.pages)):
+            form._show_tab(i)
+            # Qt5 держит размеры скрытой вкладки в кэше, пока не обработает запросы перекладки
+            for wdg in (form.pages[i], form, self._card):
+                wdg.updateGeometry()
+            QApplication.sendPostedEvents(None, getattr(QEvent, "LayoutRequest", None) or QEvent.Type.LayoutRequest)
+            self._card.layout().activate()
+            h = self._card.heightForWidth(width) if self._card.hasHeightForWidth() else -1
+            body = max(body, h if h > 0 else self._card.sizeHint().height())
+        form._show_tab(current)
         self._scroll.setMinimumHeight(body)
         want = self.sizeHint().height()
         screen = self.screen() if hasattr(self, "screen") and self.screen() else QApplication.primaryScreen()
