@@ -93,7 +93,6 @@
   "FFmpeg: проверка…": "FFmpeg : vérification…",
   "btn_update_ffmpeg": "Mettre à jour",
   "tip_update_ffmpeg": "Télécharge la dernière version de FFmpeg (gyan.dev, release-essentials) à côté du programme. Internet requis.",
-  "tip_ffmpeg_folder": "Ouvrir le dossier FFmpeg",
   "about_line": "Cine Convert · police Inter (OFL) · icônes Lucide (ISC)",
   "btn_cancel": "Annuler",
   "btn_render": "Convertir",
@@ -308,5 +307,8 @@
   "sec_video": "Vidéo",
   "sec_fragment_loud": "Extrait et volume",
   "tip_crf": "Valeur exacte au lieu du profil de qualité : plus petit = meilleur et plus gros. Échelle : x264/x265 0–51, AV1/VP9 0–63, NVENC CQ 0–51.",
-  "tip_trim": "Temps : 90, 1:30 ou 0:01:30.5. Vide : depuis le début ou jusqu'à la fin."
+  "tip_trim": "Temps : 90, 1:30 ou 0:01:30.5. Vide : depuis le début ou jusqu'à la fin.",
+  "tip_ffmpeg_folder2": "Ouvrir le dossier où se trouve FFmpeg",
+  "FFmpeg не найден. Нажмите «Обновить», чтобы скачать его.": "FFmpeg introuvable. Cliquez sur « Mettre à jour » pour le télécharger.",
+  "Не удалось открыть папку: {path}": "Impossible d'ouvrir le dossier : {path}"
 }

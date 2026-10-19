@@ -93,7 +93,6 @@
   "FFmpeg: проверка…": "FFmpeg：正在检查…",
   "btn_update_ffmpeg": "更新",
   "tip_update_ffmpeg": "将最新的 FFmpeg（gyan.dev，release-essentials）下载到程序旁。需要联网。",
-  "tip_ffmpeg_folder": "打开 FFmpeg 文件夹",
   "about_line": "Cine Convert · Inter 字体 (OFL) · Lucide 图标 (ISC)",
   "btn_cancel": "取消",
   "btn_render": "开始转换",
@@ -308,5 +307,8 @@
   "sec_video": "视频",
   "sec_fragment_loud": "片段与响度",
   "tip_crf": "用精确数值代替质量档位：越小画质越好、文件越大。范围：x264/x265 0–51，AV1/VP9 0–63，NVENC CQ 0–51。",
-  "tip_trim": "时间：90、1:30 或 0:01:30.5。留空即从开头或到结尾。"
+  "tip_trim": "时间：90、1:30 或 0:01:30.5。留空即从开头或到结尾。",
+  "tip_ffmpeg_folder2": "打开 FFmpeg 所在的文件夹",
+  "FFmpeg не найден. Нажмите «Обновить», чтобы скачать его.": "未找到 FFmpeg。点击“更新”即可下载。",
+  "Не удалось открыть папку: {path}": "无法打开文件夹：{path}"
 }

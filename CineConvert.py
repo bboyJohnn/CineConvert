@@ -136,6 +136,20 @@ def open_in_os(path):
         pass
 
 
+def reveal_in_os(path):
+    """Открывает папку файла и выделяет в ней сам файл (в Windows и macOS)."""
+    try:
+        if platform.system() == 'Windows':
+            subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+        elif platform.system() == 'Darwin':
+            subprocess.Popen(('open', '-R', path))
+        else:
+            subprocess.Popen(('xdg-open', os.path.dirname(path) or "."))
+        return True
+    except Exception:
+        return False
+
+
 def find_ffmpeg():
     """Портативный поиск ffmpeg/ffprobe: встроенная ./ffmpeg/bin → config → PATH."""
     local_bin = os.path.join(APP_DIR, "ffmpeg", "bin")
@@ -3912,10 +3926,11 @@ class VideoConverter(QMainWindow):
         try:
             self.load_locales()
             lang = cfg.get('language')
+            # язык ещё не выбирали — интерфейс русский, и в списке тоже русский
+            idx = self.locale_combo.findData(lang or "ru")
+            if idx >= 0:
+                self.locale_combo.setCurrentIndex(idx)
             if lang:
-                idx = self.locale_combo.findData(lang)
-                if idx >= 0:
-                    self.locale_combo.setCurrentIndex(idx)
                 self.apply_locale(lang)
         except Exception:
             pass
@@ -4384,9 +4399,8 @@ class VideoConverter(QMainWindow):
                   "в папку рядом с программой. Нужен интернет.", kind="tip")
         self.btn_update_ffmpeg.clicked.connect(self._update_ffmpeg)
         self.btn_ffmpeg_folder = style_button(QPushButton(), "icon")
-        self._reg(self.btn_ffmpeg_folder, "tip_ffmpeg_folder", "Открыть папку FFmpeg", kind="tip")
-        self.btn_ffmpeg_folder.clicked.connect(
-            lambda: open_in_os(os.path.join(APP_DIR, "ffmpeg", "bin")))
+        self._reg(self.btn_ffmpeg_folder, "tip_ffmpeg_folder2", "Открыть папку, где лежит FFmpeg", kind="tip")
+        self.btn_ffmpeg_folder.clicked.connect(self.open_ffmpeg_folder)
         r.addWidget(self.btn_update_ffmpeg)
         r.addWidget(self.btn_ffmpeg_folder)
         self._settings_group(lay, "sec_ffmpeg", "FFmpeg", [row_ff])
@@ -4801,13 +4815,32 @@ class VideoConverter(QMainWindow):
         except Exception:
             return tr("FFmpeg: не найден")
 
+    def _ffmpeg_location(self):
+        """Полный путь к используемому ffmpeg (встроенный, из настроек или из PATH) или None."""
+        path = getattr(self, "ffmpeg_path", "") or ""
+        if path and not os.path.isabs(path):
+            path = shutil.which(path) or ""
+        return path if path and os.path.isfile(path) else None
+
     def refresh_ffmpeg_label(self):
         text = self._ffmpeg_version_text()
-        self.ffmpeg_version_label.setText(text)
-        self.ffmpeg_version_label.setToolTip(text)
         m = re.search(r'ffmpeg version (\S+)', text)
         short = m.group(1).split('-')[0] if m else ""
+        location = self._ffmpeg_location()
+        # где лежит FFmpeg — видно сразу: встроенный, из PATH или указанный вручную
+        self.ffmpeg_version_label.setText(f"FFmpeg {short}  ·  {os.path.dirname(location)}"
+                                          if short and location else text)
+        self.ffmpeg_version_label.setToolTip(text + (f"\n{location}" if location else ""))
         self.banner.setBadge(f"FFmpeg {short}" if short else "")
+
+    def open_ffmpeg_folder(self):
+        location = self._ffmpeg_location()
+        if not location:
+            QMessageBox.warning(self, "FFmpeg", tr("FFmpeg не найден. Нажмите «Обновить», чтобы скачать его."))
+            return
+        if not reveal_in_os(location):
+            QMessageBox.warning(self, tr("Ошибка"),
+                                tr_fmt("Не удалось открыть папку: {path}", path=os.path.dirname(location)))
 
     def _update_ffmpeg(self):
         if self._busy:

@@ -93,7 +93,6 @@
   "FFmpeg: проверка…": "FFmpeg: checking…",
   "btn_update_ffmpeg": "Update",
   "tip_update_ffmpeg": "Downloads the latest FFmpeg build (gyan.dev, release-essentials) next to the app. Requires internet.",
-  "tip_ffmpeg_folder": "Open the FFmpeg folder",
   "about_line": "Cine Convert · Inter font (OFL) · Lucide icons (ISC)",
   "btn_cancel": "Cancel",
   "btn_render": "Render",
@@ -308,5 +307,8 @@
   "sec_video": "Video",
   "sec_fragment_loud": "Fragment and loudness",
   "tip_crf": "An exact value instead of the quality preset: lower means better and bigger. Scale: x264/x265 0–51, AV1/VP9 0–63, NVENC CQ 0–51.",
-  "tip_trim": "Time: 90, 1:30 or 0:01:30.5. Empty means from the very start or to the end."
+  "tip_trim": "Time: 90, 1:30 or 0:01:30.5. Empty means from the very start or to the end.",
+  "tip_ffmpeg_folder2": "Open the folder where FFmpeg is",
+  "FFmpeg не найден. Нажмите «Обновить», чтобы скачать его.": "FFmpeg was not found. Press “Update” to download it.",
+  "Не удалось открыть папку: {path}": "Couldn't open the folder: {path}"
 }

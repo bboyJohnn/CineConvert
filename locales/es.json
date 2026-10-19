@@ -93,7 +93,6 @@
   "FFmpeg: проверка…": "FFmpeg: comprobando…",
   "btn_update_ffmpeg": "Actualizar",
   "tip_update_ffmpeg": "Descarga la última versión de FFmpeg (gyan.dev, release-essentials) junto al programa. Requiere internet.",
-  "tip_ffmpeg_folder": "Abrir la carpeta de FFmpeg",
   "about_line": "Cine Convert · fuente Inter (OFL) · iconos Lucide (ISC)",
   "btn_cancel": "Cancelar",
   "btn_render": "Renderizar",
@@ -308,5 +307,8 @@
   "sec_video": "Vídeo",
   "sec_fragment_loud": "Fragmento y volumen",
   "tip_crf": "Valor exacto en lugar del perfil de calidad: menor = mejor y más grande. Escala: x264/x265 0–51, AV1/VP9 0–63, NVENC CQ 0–51.",
-  "tip_trim": "Tiempo: 90, 1:30 o 0:01:30.5. Vacío: desde el principio o hasta el final."
+  "tip_trim": "Tiempo: 90, 1:30 o 0:01:30.5. Vacío: desde el principio o hasta el final.",
+  "tip_ffmpeg_folder2": "Abrir la carpeta donde está FFmpeg",
+  "FFmpeg не найден. Нажмите «Обновить», чтобы скачать его.": "No se encontró FFmpeg. Pulsa «Actualizar» para descargarlo.",
+  "Не удалось открыть папку: {path}": "No se pudo abrir la carpeta: {path}"
 }
