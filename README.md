@@ -38,8 +38,8 @@
 | | Feature | Description |
 |---|---|---|
 | 🗂 | **File list** | Every file gets a card: preview, format · resolution · codec · bitrate · duration · size, and quick combos to change format / resolution / codec / bitrate **for that file only** |
-| 🔬 | **Per-file settings** | Click a preview or "Settings" to open a compact window for one video: preview, key characteristics and **Basic** / **Advanced** tabs |
-| 🎛 | **Common settings** | The main page shows only the file list. "Common settings" in the bottom bar opens the same window for every file without its own settings: **Basic** (format, quality, resolution, codec, bitrate) and **Advanced** (exact CRF/CQ, speed, audio in the video, mute). Changes show up on the cards at once, Cancel puts everything back |
+| 🔬 | **Per-file settings** | Click a preview or "Settings" to open a wide window for one video: preview, key characteristics and **every render setting on one page** — format, quality and exact CRF/CQ, resolution, codec, bitrate, speed, audio codec/bitrate/channels, mute |
+| 🎛 | **Common settings** | The main page shows only the file list. "Common settings" in the bottom bar opens the same window for every file without its own settings. Changes show up on the cards at once, Cancel puts everything back |
 | ☑ | **Selected files** | Tick files → "Set up selected" opens the window for all of them; only the fields you change are applied, "mixed" marks where files differ. Render / extract then works on the ticked files |
 | 🧪 | **Advanced options** | Quality preset, exact CRF/CQ, encoding speed, audio codec/bitrate/channels, remove audio |
 | 🔢 | **Bitrate presets** | Video bitrate from a list of 1000k…10000k in 1000k steps, or type your own (a bare number means kbit/s) |
@@ -65,7 +65,7 @@
 ```
 
 1. **📂 Pick videos** — drop files onto the window or click the drop zone (multiple files allowed); each one appears in the list with its own card
-2. **⚙ Tune them** — the "Common video settings" card applies to every file; change format / resolution / codec / bitrate right on a file's card, or open its "Settings" for the Basic and Advanced tabs. Tick several files and press "Set up selected" to configure them together. Leave everything on "As source" / "No changes" for an instant lossless remux
+2. **⚙ Tune them** — "Common settings" in the bottom bar applies to every file; change format / resolution / codec / bitrate right on a file's card, or open its "Settings" for everything at once. Tick several files and press "Set up selected" to configure them together. Leave everything on "As source" / "No changes" for an instant lossless remux
 3. **▶ Hit "Render"** in the action bar at the bottom (with files ticked it renders only those) — the app asks where to save (or saves straight to the default folder, if you turn the question off), then shows progress, speed and ETA
 4. **🏁 Done** — a notification with sound, plus "Open file" / "Open folder" buttons
 
@@ -95,7 +95,7 @@ Grab one of the two builds from [**Releases**](https://github.com/bboyJohnn/Cine
 |---|---|
 | ![Dark theme](docs/screen-dark.png) | ![Settings](docs/screen-settings.png) |
 
-| File settings (Basic / Advanced) | Several files at once |
+| File settings (all on one page) | Several files at once |
 |---|---|
 | ![File settings](docs/screen-file-settings.png) | ![Group settings](docs/screen-group-settings.png) |
 

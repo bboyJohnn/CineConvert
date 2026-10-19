@@ -26,7 +26,7 @@ try:
         QFrame, QColorDialog, QStyledItemDelegate
     )
     from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QRectF, QSize, QPointF,
-                              QByteArray, QVariantAnimation, QEasingCurve, QEvent)
+                              QByteArray, QVariantAnimation, QEasingCurve)
     from PyQt6.QtGui import (QFont, QPixmap, QPainter, QPainterPath, QColor, QLinearGradient,
                              QRadialGradient, QIcon, QPen, QPalette, QFontDatabase,
                              QKeySequence, QShortcut, QTransform)
@@ -39,7 +39,7 @@ except ImportError:   # нет PyQt6 или он не загружается (н
         QFrame, QColorDialog, QStyledItemDelegate, QShortcut
     )
     from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QTimer, QRectF, QSize, QPointF,
-                              QByteArray, QVariantAnimation, QEasingCurve, QEvent)
+                              QByteArray, QVariantAnimation, QEasingCurve)
     from PyQt5.QtGui import (QFont, QPixmap, QPainter, QPainterPath, QColor, QLinearGradient,
                              QRadialGradient, QIcon, QPen, QPalette, QFontDatabase,
                              QKeySequence, QTransform)
@@ -3003,11 +3003,12 @@ class MediaItem:
 #  параметры или отмеченные файлы) и в окне настроек файла/группы.
 # ============================================================================
 class SettingsForm(QWidget):
-    """Вкладки «Основные»/«Расширенные» с полями настроек. kind: "video" — рендер,
+    """Все поля настроек на одной странице, сеткой в 4 колонки. kind: "video" — рендер,
     "audio" — извлечение звука. trim=True добавляет фрагмент звука (только для файлов).
     О правке поля человеком сообщает сигнал edited(ключ); программная загрузка
     значений (load) и смена языка сигнал не посылают."""
     edited = pyqtSignal(str)
+    COLS = 4
 
     def __init__(self, kind, trim=False, info=None, parent=None):
         super().__init__(parent)
@@ -3017,31 +3018,13 @@ class SettingsForm(QWidget):
         self._texts = []      # (виджет, ключ, текст по умолчанию, "text"/"tip") — для смены языка
         self._icons = []      # (QLabel, иконка) — заголовки разделов и подсказки
         self._loading = False
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(12)
-        self.tabs = SegmentedControl()
-        self.tabs.add_items([("", "basic", "sliders-horizontal"), ("", "advanced", "gauge")])
-        self.tabs.setMaximumWidth(380)
-        lay.addWidget(self.tabs, 0, Qt.AlignmentFlag.AlignLeft)
-        self.pages, self._page_layouts = [], []
-        for _ in range(2):
-            page = QWidget()
-            page.setObjectName("transparent")
-            v = QVBoxLayout(page)
-            v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(10)
-            lay.addWidget(page)
-            self.pages.append(page)
-            self._page_layouts.append(v)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(10)
         if kind == "video":
             self._build_video()
         else:
             self._build_audio()
-        # Вкладки переключаются видимостью: QStackedWidget учитывал бы высоту
-        # скрытой вкладки и давал лишнюю прокрутку
-        self.tabs.currentIndexChanged.connect(self._show_tab)
-        self._show_tab(0)
         self._connect()
         self.retranslate()
         self.refresh_icons()
@@ -3070,6 +3053,10 @@ class SettingsForm(QWidget):
         v.addLayout(head)
         if isinstance(widget, (QComboBox, QLineEdit)):
             widget.setMinimumHeight(34)       # окно настроек — плотнее страницы
+        if isinstance(widget, QComboBox):
+            # колонки одной ширины: длинный пункт (дорожка, кодек) обрезается, а не раздвигает окно
+            widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            widget.setMinimumContentsLength(4)
         v.addWidget(display or widget)
         if tip_key:
             self._t(widget, tip_key, tip, "tip")
@@ -3089,10 +3076,19 @@ class SettingsForm(QWidget):
         holder.setLayout(row)
         return self._field(key, lkey, label, switch, display=holder)
 
-    def _section(self, layout, icon, tkey, title, skey=None, sub=None, first=False):
-        if not first:
-            layout.addSpacing(2)
-            layout.addWidget(make_divider())
+    def _grid(self):
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        for c in range(self.COLS):
+            grid.setColumnStretch(c, 1)
+        self._lay.addLayout(grid)
+        return grid
+
+    def _section(self, icon, tkey, title):
+        """Разделитель и заголовок раздела с иконкой → сетка его полей."""
+        self._lay.addSpacing(2)
+        self._lay.addWidget(make_divider())
         row = QHBoxLayout()
         row.setSpacing(8)
         ic = QLabel()
@@ -3100,25 +3096,14 @@ class SettingsForm(QWidget):
         self._icons.append((ic, icon))
         row.addWidget(ic, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(self._t(_set_role(QLabel(), "rowTitle"), tkey, title), 1)
-        layout.addLayout(row)
-        if sub:
-            s = self._t(_set_role(QLabel(), "caption"), skey, sub)
-            s.setWordWrap(True)
-            layout.addWidget(s)
-        return self._grid(layout)
+        self._lay.addLayout(row)
+        return self._grid()
 
-    @staticmethod
-    def _grid(layout):
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
-        for c in range(3):
-            grid.setColumnStretch(c, 1)
-        layout.addLayout(grid)
-        return grid
-
-    def _hint_row(self, layout):
-        row = QHBoxLayout()
+    def _hint(self):
+        holder = QWidget()
+        holder.setObjectName("transparent")
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         ic = QLabel()
         ic.setFixedSize(16, 16)
@@ -3127,7 +3112,7 @@ class SettingsForm(QWidget):
         self.hint = _set_role(QLabel(), "sub")
         self.hint.setWordWrap(True)
         row.addWidget(self.hint, 1)
-        layout.addLayout(row)
+        return holder
 
     def _segmented(self, items):
         seg = SegmentedControl()
@@ -3140,16 +3125,24 @@ class SettingsForm(QWidget):
         return edit
 
     def _build_video(self):
-        basic, adv = self._page_layouts
-        basic.addWidget(self._field("format", "lbl_format", "Формат", self._segmented(FORMAT_ITEMS),
-                                    tip_key="tip_format",
-                                    tip="Контейнер выходного файла. «Исходный» — оставить как у исходника."))
-        basic.addWidget(self._field("quality", "lbl_quality", "Качество", self._segmented(QUALITY_ITEMS),
-                                    tip_key="tip_quality",
-                                    tip="Качество при перекодировании (CRF/CQ, как в HandBrake). "
-                                        "«Как в исходнике» — без перекодирования, если возможно."))
-        self._hint_row(basic)
-        grid = self._grid(basic)
+        grid = self._grid()
+        grid.addWidget(self._field("format", "lbl_format", "Формат", self._segmented(FORMAT_ITEMS),
+                                   tip_key="tip_format",
+                                   tip="Контейнер выходного файла. «Исходный» — оставить как у исходника."),
+                       0, 0, 1, 4)
+        grid.addWidget(self._field("quality", "lbl_quality", "Качество", self._segmented(QUALITY_ITEMS),
+                                   tip_key="tip_quality",
+                                   tip="Качество при перекодировании (CRF/CQ, как в HandBrake). "
+                                       "«Как в исходнике» — без перекодирования, если возможно."),
+                       1, 0, 1, 3)
+        grid.addWidget(self._field("crf", "lbl_crf", "Точное качество (CRF/CQ)",
+                                   make_combo(CRF_ITEMS, editable=True, numeric=True),
+                                   tip_key="tip_crf",
+                                   tip="Точное значение вместо профиля качества: меньше — лучше и крупнее. "
+                                       "Шкала: x264/x265 0–51, AV1/VP9 0–63, NVENC CQ 0–51."), 1, 3)
+        grid.addWidget(self._hint(), 2, 0, 1, 4)
+
+        grid = self._section("film", "sec_video", "Видео")
         grid.addWidget(self._field("resolution", "lbl_resolution", "Разрешение", make_combo(RESOLUTION_ITEMS)),
                        0, 0)
         grid.addWidget(self._field("video_codec", "lbl_codec", "Кодек", make_combo(VCODEC_ITEMS),
@@ -3161,53 +3154,46 @@ class SettingsForm(QWidget):
                                    tip_key="tip_bitrate",
                                    tip="Средний битрейт видео (напр. 2000k) вместо качества. «Без изменений» — "
                                        "управлять качеством (рекомендуется). Можно ввести своё значение."), 0, 2)
+        grid.addWidget(self._field("speed", "lbl_speed", "Скорость кодирования", make_combo(SPEED_ITEMS)), 0, 3)
 
-        grid = self._section(adv, "gauge", "sec_quality_speed", "Качество и скорость", "sec_quality_speed_sub",
-                             "Точное значение заменяет профиль качества: меньше — лучше и крупнее. "
-                             "Шкала: x264/x265 0–51, AV1/VP9 0–63, NVENC CQ 0–51.", first=True)
-        grid.addWidget(self._field("crf", "lbl_crf", "Точное качество (CRF/CQ)",
-                                   make_combo(CRF_ITEMS, editable=True, numeric=True)), 0, 0)
-        grid.addWidget(self._field("speed", "lbl_speed", "Скорость кодирования", make_combo(SPEED_ITEMS)), 0, 1)
-        grid = self._section(adv, "audio-lines", "card_vaudio", "Звук в видео")
+        grid = self._section("audio-lines", "card_vaudio", "Звук в видео")
         grid.addWidget(self._field("audio_codec", "lbl_acodec", "Кодек", make_combo(ACODEC_ITEMS)), 0, 0)
         grid.addWidget(self._field("audio_bitrate", "lbl_abitrate", "Битрейт",
                                    make_combo(ABITRATE_ITEMS, editable=True)), 0, 1)
         grid.addWidget(self._field("audio_channels", "lbl_achannels", "Каналы", make_combo(ACHANNEL_ITEMS)), 0, 2)
-        grid.addWidget(self._toggle("mute", "lbl_sound", "Звук", "lbl_mute", "Убрать звук из видео"), 1, 0, 1, 3)
-        basic.addStretch(1)
-        adv.addStretch(1)
+        grid.addWidget(self._toggle("mute", "lbl_sound", "Звук", "lbl_mute", "Убрать звук"), 0, 3)
 
     def _build_audio(self):
-        basic, adv = self._page_layouts
-        basic.addWidget(self._field("format", "lbl_aformat", "Формат аудио",
-                                    self._segmented(EXTRACT_FORMAT_ITEMS)))
-        self._hint_row(basic)
-        grid = self._grid(basic)
+        grid = self._grid()
+        grid.addWidget(self._field("format", "lbl_aformat", "Формат аудио",
+                                   self._segmented(EXTRACT_FORMAT_ITEMS)), 0, 0, 1, 4)
+        grid.addWidget(self._hint(), 1, 0, 1, 4)
         grid.addWidget(self._field("bitrate", "lbl_abitrate", "Битрейт",
                                    make_combo(EXTRACT_BITRATE_ITEMS, editable=True),
                                    tip_key="tip_extract_bitrate",
                                    tip="«Авто» — высокое качество для выбранного формата. "
-                                       "Для FLAC и WAV битрейт не нужен — они без потерь."), 0, 0)
-        grid.addWidget(self._field("channels", "lbl_achannels", "Каналы", make_combo(ACHANNEL_ITEMS)), 0, 1)
+                                       "Для FLAC и WAV битрейт не нужен — они без потерь."), 2, 0)
+        grid.addWidget(self._field("channels", "lbl_achannels", "Каналы", make_combo(ACHANNEL_ITEMS)), 2, 1)
+        grid.addWidget(self._field("sample_rate", "lbl_sample_rate", "Частота дискретизации",
+                                   make_combo(SAMPLE_RATE_ITEMS)), 2, 2)
         track = ComboBox()
         fill_track_combo(track, self.info)
         grid.addWidget(self._field("track", "lbl_track", "Дорожка", track,
                                    tip_key="tip_track",
                                    tip="Из какой звуковой дорожки извлекать — например, другой язык "
-                                       "или комментарии. Если такой дорожки нет — берётся первая."), 0, 2)
+                                       "или комментарии. Если такой дорожки нет — берётся первая."), 2, 3)
+        normalize = self._toggle("normalize", "lbl_loudness", "Громкость", "lbl_normalize",
+                                 "Выровнять громкость (EBU R128)")
         if self.trim:
-            grid = self._section(adv, "scissors", "sec_fragment", "Фрагмент", "sec_fragment_sub",
-                                 "Какой кусок звука сохранить. Время: 90, 1:30 или 0:01:30.5; "
-                                 "пусто — с самого начала и до конца.", first=True)
-            grid.addWidget(self._field("trim_start", "lbl_trim_start", "Начало", self._time_edit("0:00")), 0, 0)
-            grid.addWidget(self._field("trim_end", "lbl_trim_end", "Конец", self._time_edit()), 0, 1)
-        grid = self._section(adv, "waves", "sec_processing", "Обработка звука", first=not self.trim)
-        grid.addWidget(self._field("sample_rate", "lbl_sample_rate", "Частота дискретизации",
-                                   make_combo(SAMPLE_RATE_ITEMS)), 0, 0)
-        grid.addWidget(self._toggle("normalize", "lbl_loudness", "Громкость", "lbl_normalize",
-                                    "Выровнять громкость (EBU R128)"), 0, 1, 1, 2)
-        basic.addStretch(1)
-        adv.addStretch(1)
+            grid = self._section("scissors", "sec_fragment_loud", "Фрагмент и громкость")
+            tip = ("tip_trim", "Время: 90, 1:30 или 0:01:30.5. Пусто — с самого начала и до конца.")
+            grid.addWidget(self._field("trim_start", "lbl_trim_start", "Начало", self._time_edit("0:00"),
+                                       tip_key=tip[0], tip=tip[1]), 0, 0)
+            grid.addWidget(self._field("trim_end", "lbl_trim_end", "Конец", self._time_edit(),
+                                       tip_key=tip[0], tip=tip[1]), 0, 1)
+            grid.addWidget(normalize, 0, 2, 1, 2)
+        else:
+            grid.addWidget(normalize, 3, 0, 1, 2)
 
     def _connect(self):
         for key, w in self.fields.items():
@@ -3224,10 +3210,6 @@ class SettingsForm(QWidget):
                 w.toggled.connect(emit)
             else:
                 w.textEdited.connect(emit)
-
-    def _show_tab(self, index):
-        for i, page in enumerate(self.pages):
-            page.setVisible(i == index)
 
     # ---- значения ----
     def get(self, key):
@@ -3315,8 +3297,6 @@ class SettingsForm(QWidget):
                     w.setToolTip(tr(key, default))
                 else:
                     w.setText(tr(key, default))
-            self.tabs.setItemText(0, tr("tab_basic", "Основные"))
-            self.tabs.setItemText(1, tr("tab_advanced", "Расширенные"))
             for key, w in self.fields.items():
                 if key == "track":
                     fill_track_combo(w, self.info)
@@ -3330,7 +3310,6 @@ class SettingsForm(QWidget):
     def refresh_icons(self):
         for ic, kind in self._icons:
             ic.setPixmap(icon_pixmap(kind, T.COLOR_TEXT_MUTED, ic.width(), 2.0))
-        self.tabs.refresh_icons()
 
 
 # ============================================================================
@@ -3586,7 +3565,7 @@ class FileSettingsDialog(ThemedDialog):
             self._snapshot = dict(owner.current_settings(kind))
         else:
             self._snapshot = [(it, owner.own_settings(it, kind)) for it in self.items]
-        self.setMinimumWidth(600)
+        self.setMinimumWidth(640)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 14)
@@ -3651,31 +3630,29 @@ class FileSettingsDialog(ThemedDialog):
             self._fitted = True
             self._fit_size()
 
+    WIDTH = 900
+
     def _fit_size(self):
-        """Окно по содержимому: без пустого места и, если хватает экрана, без прокрутки.
-        Обе вкладки меряются по очереди — окно не прыгает при переключении."""
-        form, current = self.form, self.form.tabs.currentIndex()
-        # ширина без полосы прокрутки: после подгонки её не будет
-        width = max(self._scroll.width() if self.isVisible() else self._scroll.viewport().width(), 1)
-        body = 0
-        for i in range(len(form.pages)):
-            form._show_tab(i)
-            # Qt5 держит размеры скрытой вкладки в кэше, пока не обработает запросы перекладки
-            for wdg in (form.pages[i], form, self._card):
-                wdg.updateGeometry()
-            QApplication.sendPostedEvents(None, getattr(QEvent, "LayoutRequest", None) or QEvent.Type.LayoutRequest)
-            self._card.layout().activate()
-            h = self._card.heightForWidth(width) if self._card.hasHeightForWidth() else -1
-            body = max(body, h if h > 0 else self._card.sizeHint().height())
-        form._show_tab(current)
+        """Широкое окно по содержимому: все поля видны сразу, без пустого места и
+        прокрутки (на маленьком экране — с прокруткой)."""
+        screen = self.screen() if hasattr(self, "screen") and self.screen() else QApplication.primaryScreen()
+        geo = screen.availableGeometry() if screen is not None else None
+        width = min(self.WIDTH, geo.width() - 40) if geo is not None else self.WIDTH
+        m = self.layout().contentsMargins()
+        inner = max(width - m.left() - m.right(), 1)
+        lay = self._card.layout()
+        lay.invalidate()
+        lay.activate()
+        body = self._card.heightForWidth(inner) if self._card.hasHeightForWidth() else -1
+        if body <= 0:
+            body = self._card.sizeHint().height()
         self._scroll.setMinimumHeight(body)
         want = self.sizeHint().height()
-        screen = self.screen() if hasattr(self, "screen") and self.screen() else QApplication.primaryScreen()
-        avail = screen.availableGeometry().height() - 60 if screen is not None else want
+        avail = geo.height() - 60 if geo is not None else want
         if want > avail:          # маленький экран — дальше прокрутка
             self._scroll.setMinimumHeight(max(200, body - (want - avail)))
             want = avail
-        self.resize(max(640, self.sizeHint().width()), want)
+        self.resize(width, want)
 
     # ---- шапка: файл, список выбранных или «общие параметры» ----
     def _build_header(self):
@@ -3694,7 +3671,7 @@ class FileSettingsDialog(ThemedDialog):
             col.addWidget(s)
         elif not self.group:
             it = self.items[0]
-            pv = PreviewView(160, 90)
+            pv = PreviewView(176, 99)
             if it.thumb is not None:
                 pv.setPixmap(it.thumb)
             else:
