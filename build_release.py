@@ -7,7 +7,7 @@ FFmpeg скачивается сам (те же источники, что и у
 и кладётся внутрь сборки — программа работает сразу и без интернета.
 
 Результат (папка release/):
-  Windows  CineConvert-portable.zip            exe + FFmpeg + locales, сразу и офлайн
+  Windows  CineConvert-portable.zip            папка: exe + FFmpeg + locales, сразу и офлайн
            CineConvert.exe                     лёгкий exe; FFmpeg докачается при первом запуске
   Linux    CineConvert-linux-<arch>.tar.gz     папка с программой и FFmpeg; запуск ./CineConvert
   macOS    CineConvert-macos-<arch>.dmg        CineConvert.app с FFmpeg внутри
@@ -96,12 +96,12 @@ def fetch_ffmpeg():
     print(">>> FFmpeg готов:", (out.splitlines() or ["?"])[0])
 
 
-def pyinstaller(onefile, extra=()):
+def pyinstaller(onefile, extra=(), dist=DIST):
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed",
            "--onefile" if onefile else "--onedir", "--name", NAME,
            "--add-data", f"{os.path.join(SRC, 'locales')}{SEP}locales",
            "--add-data", f"{os.path.join(SRC, 'fonts')}{SEP}fonts",
-           "--distpath", DIST, "--workpath", WORK, "--specpath", WORK]
+           "--distpath", dist, "--workpath", WORK, "--specpath", WORK]
     icon = os.path.join(SRC, "app.ico")
     if os.path.exists(icon):
         cmd += ["--icon", icon, "--add-data", f"{icon}{SEP}."]
@@ -128,16 +128,25 @@ def fresh_release_dir():
 
 
 def build_windows():
-    pyinstaller(onefile=True)
-    exe = os.path.join(DIST, NAME + EXE)
+    # лёгкий exe — один файл; FFmpeg он докачает при первом запуске
+    pyinstaller(onefile=True, dist=os.path.join(DIST, "onefile"))
+    exe = os.path.join(DIST, "onefile", NAME + EXE)
     fresh_release_dir()
-    shutil.copy2(exe, os.path.join(RELEASE, NAME + EXE))           # лёгкий exe
+    shutil.copy2(exe, os.path.join(RELEASE, NAME + EXE))
+    light = os.path.join(DIST, "light-test")                       # для самопроверки: exe + FFmpeg рядом
+    if os.path.exists(light):
+        shutil.rmtree(light)
+    shutil.copytree(FFMPEG_BIN, os.path.join(light, "ffmpeg", "bin"))
+    shutil.copy2(exe, os.path.join(light, NAME + EXE))
 
-    port = os.path.join(DIST, NAME + "-portable")                  # portable: exe + ffmpeg + locales
+    # portable — обычная папка (exe + _internal), а не самораспаковывающийся exe:
+    # антивирусы реже принимают её за угрозу, и запускается она быстрее
+    pyinstaller(onefile=False, dist=os.path.join(DIST, "onedir"))
+    port = os.path.join(DIST, NAME + "-portable")
     if os.path.exists(port):
         shutil.rmtree(port)
+    shutil.copytree(os.path.join(DIST, "onedir", NAME), port)
     shutil.copytree(FFMPEG_BIN, os.path.join(port, "ffmpeg", "bin"))
-    shutil.copy2(exe, os.path.join(port, NAME + EXE))
     shutil.copytree(os.path.join(SRC, "locales"), os.path.join(port, "locales"))
     copy_extras(port)
     zip_path = os.path.join(RELEASE, NAME + "-portable.zip")
@@ -146,7 +155,7 @@ def build_windows():
             for f in files:
                 full = os.path.join(root, f)
                 z.write(full, os.path.join(NAME + "-portable", os.path.relpath(full, port)))
-    return port
+    return [port, light]
 
 
 def build_linux():
@@ -226,11 +235,12 @@ def main():
     if IS_WIN:
         built = build_windows()
     elif IS_MAC:
-        built = build_macos()
+        built = [build_macos()]
     else:
-        built = build_linux()
+        built = [build_linux()]
     if "--selftest" in sys.argv:
-        selftest(built)
+        for folder in built:
+            selftest(folder)
     print("\n>>> Готово:")
     for f in sorted(os.listdir(RELEASE)):
         print(f"    {f}  ({os.path.getsize(os.path.join(RELEASE, f)) // (1024 * 1024)} МБ)")
