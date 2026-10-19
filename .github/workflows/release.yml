@@ -1,0 +1,101 @@
+# Сборки CineConvert для Windows, Linux и macOS с FFmpeg внутри.
+# На pull request — только сборка и самопроверка (готовые файлы — в Artifacts).
+# Ручной запуск (Actions → «Build & Release» → Run workflow) или тег v* — ещё и релиз.
+name: Build & Release
+
+on:
+  pull_request:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag, e.g. v3.0"
+        required: true
+        default: "v3.0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            arch: x64
+          - name: Linux x86_64
+            os: ubuntu-22.04          # старый glibc — сборка запустится и на свежих дистрибутивах
+            arch: x64
+          - name: macOS Apple Silicon
+            os: macos-14
+            arch: arm64
+          - name: macOS Intel
+            os: macos-14              # x64-Python под Rosetta собирает приложение для Intel
+            arch: x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.arch }}
+
+      - name: Qt system libraries (Linux)
+        if: runner.os == 'Linux'
+        # PyInstaller кладёт их в сборку — на чистой системе ничего доставлять не нужно
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \
+            libxcb-util1 libxkbcommon-x11-0 libegl1 libgl1 libfontconfig1 libdbus-1-3
+
+      - name: Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyQt6 pyinstaller pillow certifi
+
+      - name: Build + self-test
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python build_release.py --selftest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CineConvert-${{ runner.os }}-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -la assets
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          name: CineConvert ${{ github.event.inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          body_path: .github/release-notes.md
+          files: assets/*
+          fail_on_unmatched_files: true
+          make_latest: true
