@@ -154,7 +154,6 @@ All four builds are made by GitHub Actions (`.github/workflows/release.yml`): ev
 ═══════════════════════════ CONTINUE? ═══════════════════════════
 ```
 
-- 📁 **`old/`** — the previous version of the app (single screen, old design). Kept for history
 - 🐛 **Found a bug?** — open an [Issue](https://github.com/bboyJohnn/CineConvert/issues) with the log from the "Logs" tab
 - 🧡 Built on [FFmpeg](https://ffmpeg.org/) (builds by [gyan.dev](https://www.gyan.dev/ffmpeg/builds/), [BtbN](https://github.com/BtbN/FFmpeg-Builds) and [Martin Riedl](https://ffmpeg.martin-riedl.de/)) and [PyQt6](https://pypi.org/project/PyQt6/); font [Inter](https://github.com/rsms/inter) (OFL), icons [Lucide](https://lucide.dev) (ISC); quality presets inspired by [HandBrake](https://handbrake.fr/)
 
