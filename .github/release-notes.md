@@ -7,14 +7,14 @@ A new look, a file list with per-file settings, smarter encoding — and builds 
 
 | System | File | How to run |
 |---|---|---|
-| 🪟 **Windows 10/11** | **CineConvert-portable.zip** — recommended | Unzip → run `CineConvert.exe`. Works offline, FFmpeg bundled |
+| 🪟 **Windows 10/11** | **CineConvert-portable.zip** — recommended | Unzip → run `CineConvert.exe` in the `CineConvert-portable` folder. Works offline, FFmpeg bundled. A regular folder, not a self-extracting exe: starts faster and antiviruses rarely flag it |
 | 🪟 Windows (light) | CineConvert.exe | Run it — downloads FFmpeg by itself on first launch (internet needed once) |
 | 🐧 **Linux x86_64** | **CineConvert-linux-x86_64.tar.gz** | Extract → run `CineConvert/CineConvert`. Ubuntu 22.04+, Debian 12+, Fedora 36+ and similar |
 | 🍎 **macOS, Apple Silicon (M1–M4)** | **CineConvert-macos-apple-silicon.dmg** | Open → drag *CineConvert* into *Applications* |
 | 🍎 macOS, Intel | CineConvert-macos-intel.dmg | Same as above |
 
 ### First launch
-- **Windows**: SmartScreen may warn about an unknown publisher — click **More info → Run anyway**.
+- **Windows**: SmartScreen may warn about an unknown publisher — click **More info → Run anyway**. If an antivirus quarantines the program, it is a false positive common to unsigned Python apps: restore it in **Windows Security → Protection history → Allow**, or use the portable folder, which is flagged far less often.
 - **macOS**: the app is not notarized by Apple, so the first launch is blocked. Open **System Settings → Privacy & Security** and click **Open Anyway** (or right-click the app → **Open** on older macOS). Alternatively, in Terminal: `xattr -dr com.apple.quarantine /Applications/CineConvert.app`.
 - **Linux**: if the file manager does not start it, run `./CineConvert` from a terminal in the extracted folder.
 

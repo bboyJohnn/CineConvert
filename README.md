@@ -80,7 +80,7 @@ Grab the build for your system from [**Releases**](https://github.com/bboyJohnn/
 
 | System | File | How to run |
 |---|---|---|
-| 🪟 **Windows 10/11** | 🕹 **CineConvert-portable.zip** — recommended | Unzip → run `CineConvert.exe` → it just works, fully offline. FFmpeg is bundled |
+| 🪟 **Windows 10/11** | 🕹 **CineConvert-portable.zip** — recommended | Unzip → run `CineConvert.exe` in the `CineConvert-portable` folder → it just works, fully offline. FFmpeg is bundled. A regular folder, not a self-extracting exe: starts faster and antiviruses rarely flag it. Keep the folder's files together |
 | 🪟 Windows (light) | 🪶 CineConvert.exe | Downloads FFmpeg by itself on first launch (internet needed once) |
 | 🐧 **Linux x86_64** | **CineConvert-linux-x86_64.tar.gz** | Extract → run `CineConvert/CineConvert`. FFmpeg and Qt libraries bundled |
 | 🍎 **macOS Apple Silicon** | **CineConvert-macos-apple-silicon.dmg** | Open → drag *CineConvert* into *Applications*. FFmpeg bundled |
