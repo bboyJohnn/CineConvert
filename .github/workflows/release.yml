@@ -39,7 +39,7 @@ jobs:
             os: macos-14
             arch: arm64
           - name: macOS Intel
-            os: macos-14              # x64-Python под Rosetta собирает приложение для Intel
+            os: macos-15-intel        # настоящий Intel: на ARM-машине Python работает как arm64
             arch: x64
     steps:
       - uses: actions/checkout@v4
@@ -86,8 +86,14 @@ jobs:
           path: assets
           merge-multiple: true
 
-      - name: List assets
-        run: ls -la assets
+      - name: Check assets
+        # все пять файлов на месте — иначе релиз не публикуется
+        run: |
+          ls -la assets
+          for f in CineConvert.exe CineConvert-portable.zip CineConvert-linux-x86_64.tar.gz \
+                   CineConvert-macos-apple-silicon.dmg CineConvert-macos-intel.dmg; do
+            test -s "assets/$f" || { echo "::error::нет файла $f"; exit 1; }
+          done
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
