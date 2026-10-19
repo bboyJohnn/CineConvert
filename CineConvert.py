@@ -12,6 +12,8 @@ import math
 import subprocess
 import platform
 import zipfile
+import tarfile
+import tempfile
 import urllib.request
 import ctypes
 import shutil
@@ -81,7 +83,34 @@ else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 RESOURCE_DIR = getattr(sys, '_MEIPASS', APP_DIR)
-CONFIG_FILE = os.path.join(APP_DIR, "config.json")
+
+
+def _user_data_dir():
+    if sys.platform == 'darwin':
+        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", "CineConvert")
+    if sys.platform == 'win32':
+        return os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "CineConvert")
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "CineConvert")
+
+
+def _pick_data_dir():
+    """Где хранить config.json, свои переводы и скачанный FFmpeg. Обычно рядом с
+    программой (портативно); в пакете macOS (.app) и в папке без права записи —
+    в папке пользователя: внутри .app писать нельзя, это ломает подпись."""
+    mac_bundle = sys.platform == 'darwin' and getattr(sys, 'frozen', False)
+    if not mac_bundle and os.access(APP_DIR, os.W_OK):
+        return APP_DIR
+    folder = _user_data_dir()
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError:
+        return APP_DIR
+    return folder
+
+
+DATA_DIR = _pick_data_dir()
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 
 # Иконка приложения: из распакованных ресурсов (_MEIPASS) или рядом с программой
 APP_ICON = next((p for p in (os.path.join(RESOURCE_DIR, "app.ico"),
@@ -150,13 +179,25 @@ def reveal_in_os(path):
         return False
 
 
+def _unique(paths):
+    seen, out = set(), []
+    for p in paths:
+        key = os.path.normcase(os.path.abspath(p))
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
 def find_ffmpeg():
-    """Портативный поиск ffmpeg/ffprobe: встроенная ./ffmpeg/bin → config → PATH."""
-    local_bin = os.path.join(APP_DIR, "ffmpeg", "bin")
-    ff = os.path.join(local_bin, "ffmpeg" + _EXE)
-    fp = os.path.join(local_bin, "ffprobe" + _EXE)
-    if os.path.exists(ff):
-        return ff, (fp if os.path.exists(fp) else ff)
+    """Поиск ffmpeg/ffprobe: скачанный/обновлённый (папка данных) → рядом с
+    программой (портативная сборка) → внутри пакета (.app) → config → PATH."""
+    for root in _unique([DATA_DIR, APP_DIR, RESOURCE_DIR]):
+        local_bin = os.path.join(root, "ffmpeg", "bin")
+        ff = os.path.join(local_bin, "ffmpeg" + _EXE)
+        fp = os.path.join(local_bin, "ffprobe" + _EXE)
+        if os.path.isfile(ff):
+            return ff, (fp if os.path.isfile(fp) else ff)
 
     cfg = load_config()
     ff = cfg.get("ffmpeg_path", "")
@@ -193,10 +234,16 @@ def tr(key, default=None):
     return key if default is None else default
 
 
+def locale_dirs():
+    """Папки с переводами: встроенные → рядом с программой → свои (папка данных).
+    Файл с тем же кодом из более поздней папки заменяет встроенный."""
+    return _unique([os.path.join(d, "locales") for d in (RESOURCE_DIR, APP_DIR, DATA_DIR)])
+
+
 def preload_locale(code):
     """Загружает перевод до создания окон (чтобы и мастер установки FFmpeg был
     на выбранном языке). Окно потом применяет язык ещё раз через apply_locale."""
-    for folder in (os.path.join(RESOURCE_DIR, "locales"), os.path.join(APP_DIR, "locales")):
+    for folder in reversed(locale_dirs()):
         path = os.path.join(folder, f"{code}.json")
         if code and os.path.exists(path):
             try:
@@ -297,6 +344,20 @@ def is_system_dark():
                     winreg.HKEY_CURRENT_USER,
                     r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') as key:
                 return winreg.QueryValueEx(key, 'AppsUseLightTheme')[0] == 0
+        except Exception:
+            pass
+        return False
+    try:                       # Qt 6.5+: тема системы на любой ОС
+        scheme = QApplication.styleHints().colorScheme()
+        if scheme != Qt.ColorScheme.Unknown:
+            return scheme == Qt.ColorScheme.Dark
+    except Exception:
+        pass
+    if sys.platform == 'darwin':
+        try:
+            r = subprocess.run(['defaults', 'read', '-g', 'AppleInterfaceStyle'],
+                               capture_output=True, text=True, timeout=3)
+            return 'dark' in (r.stdout or '').lower()
         except Exception:
             pass
     return False
@@ -1630,11 +1691,11 @@ FFMPEG_DOWNLOAD_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essenti
 FFMPEG_VERSION_URL = "https://www.gyan.dev/ffmpeg/builds/release-version"
 
 
-def _net_urlopen(url, timeout=30):
+def _net_urlopen(url, timeout=30, headers=None):
     """urlopen с UA и запасными SSL-контекстами: системный → certifi → без
     проверки. Как в DIV (сначала certifi, не отключая проверку), плюс последний
     фолбэк без верификации — на случай перекоса часов/старых корневых серт."""
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    req = urllib.request.Request(url, headers=dict({"User-Agent": "Mozilla/5.0"}, **(headers or {})))
     contexts = [None]
     try:
         import certifi
@@ -1661,18 +1722,133 @@ def _version_tuple(v):
     return tuple(int(x) for x in re.findall(r'\d+', v or '')) or (0,)
 
 
+def short_ffmpeg_version(text):
+    """«ffmpeg version 7.1-full_build…» → «7.1»; ночные сборки «N-121234-g…» → «N-121234»."""
+    m = re.search(r'ffmpeg version (\S+)', text or "")
+    if not m:
+        return None
+    parts = m.group(1).split('-')
+    if parts[0] == "N" and len(parts) > 1:
+        return "-".join(parts[:2])
+    return parts[0][1:] if re.fullmatch(r'n\d[\d.]*', parts[0]) else parts[0]   # BtbN: «n7.1»
+
+
 def ffmpeg_local_version(ffmpeg_path):
     """Версия локального ffmpeg (`ffmpeg -version`) или None."""
     try:
         r = run_hidden([ffmpeg_path, "-version"], capture_output=True, text=True, timeout=10)
-        m = re.search(r'ffmpeg version (\S+)', r.stdout or "")
-        return m.group(1).split('-')[0] if m else None
+        return short_ffmpeg_version(r.stdout)
     except Exception:
         return None
 
 
+def _btbn_release_url(arch):
+    """Ссылка на последнюю релизную (не master) сборку BtbN для Linux или None."""
+    token = os.environ.get("GITHUB_TOKEN")        # при сборке в CI — без лимита анонимных запросов
+    try:
+        with _net_urlopen("https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest", timeout=20,
+                          headers={"Authorization": f"Bearer {token}"} if token else None) as r:
+            assets = json.loads(r.read().decode("utf-8", "replace")).get("assets") or []
+    except Exception:
+        return None
+    best = None
+    for a in assets:
+        m = re.fullmatch(rf"ffmpeg-n([\d.]+)-latest-{arch}-gpl-[\d.]+\.tar\.xz", a.get("name") or "")
+        if m and (best is None or _version_tuple(m.group(1)) > best[0]):
+            best = (_version_tuple(m.group(1)), a.get("browser_download_url"))
+    return best[1] if best else None
+
+
+def ffmpeg_sources():
+    """Откуда скачать FFmpeg для этой системы: варианты по порядку, каждый —
+    список архивов (у сборок для macOS ffmpeg и ffprobe лежат в отдельных zip)."""
+    arm = platform.machine().lower() in ("arm64", "aarch64")
+    if sys.platform == 'win32':
+        return [[FFMPEG_DOWNLOAD_URL],
+                ["https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+                 "ffmpeg-master-latest-win64-gpl.zip"]]
+    if sys.platform == 'darwin':
+        base = f"https://ffmpeg.martin-riedl.de/redirect/latest/macos/{'arm64' if arm else 'amd64'}/release/"
+        sources = [[base + "ffmpeg.zip", base + "ffprobe.zip"]]
+        if not arm:
+            sources.append(["https://evermeet.cx/ffmpeg/getrelease/zip",
+                            "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip"])
+        return sources
+    arch = "linuxarm64" if arm else "linux64"
+    sources = []
+    release = _btbn_release_url(arch)
+    if release:
+        sources.append([release])
+    sources.append([f"https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+                    f"ffmpeg-master-latest-{arch}-gpl.tar.xz"])
+    base = f"https://ffmpeg.martin-riedl.de/redirect/latest/linux/{'arm64' if arm else 'amd64'}/release/"
+    sources.append([base + "ffmpeg.zip", base + "ffprobe.zip"])
+    return sources
+
+
+def download_file(url, dst, on_progress=None, should_cancel=None):
+    """Атомарная стриминговая загрузка через .part; on_progress(проценты)."""
+    tmp = dst + ".part"
+    try:
+        with _net_urlopen(url, timeout=60) as resp, open(tmp, 'wb') as out_f:
+            total = resp.getheader('Content-Length')
+            total = int(total) if total and total.isdigit() else None
+            downloaded = 0
+            while True:
+                if should_cancel and should_cancel():
+                    raise RuntimeError("Отменено пользователем")
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                out_f.write(chunk)
+                downloaded += len(chunk)
+                if total and on_progress:
+                    on_progress(int(downloaded * 100 / total))
+        if total is not None and downloaded < total:
+            raise RuntimeError(f"Неполная загрузка: {downloaded}/{total} байт")
+        os.replace(tmp, dst)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def extract_ffmpeg_binaries(archives, dest_bin):
+    """Достаёт ffmpeg и ffprobe из архивов (zip / tar.xz / tar.gz) в dest_bin
+    и делает их исполняемыми. Возвращает dest_bin."""
+    wanted = {"ffmpeg" + _EXE, "ffprobe" + _EXE}
+    os.makedirs(dest_bin, exist_ok=True)
+    found = set()
+    for archive in archives:
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(dest_bin) or None) as tmp:
+            if zipfile.is_zipfile(archive):
+                with zipfile.ZipFile(archive) as z:
+                    z.extractall(tmp)
+            elif tarfile.is_tarfile(archive):
+                with tarfile.open(archive, "r:*") as t:
+                    members = [m for m in t.getmembers() if m.isfile() and os.path.basename(m.name) in wanted]
+                    for m in members:
+                        m.name = os.path.basename(m.name)    # без вложенных путей и «..»
+                    t.extractall(tmp, members=members)
+            else:
+                raise RuntimeError("Неизвестный формат архива")
+            for root, _dirs, files in os.walk(tmp):
+                for f in files:
+                    if f in wanted and f not in found:
+                        shutil.copy2(os.path.join(root, f), os.path.join(dest_bin, f))
+                        os.chmod(os.path.join(dest_bin, f), 0o755)
+                        found.add(f)
+    if "ffmpeg" + _EXE not in found:
+        raise RuntimeError("В архиве не найден ffmpeg")
+    return dest_bin
+
+
 def ffmpeg_latest_version():
-    """Последняя версия сборки FFmpeg с gyan.dev или None."""
+    """Последняя версия сборки FFmpeg с gyan.dev (только для Windows) или None."""
+    if sys.platform != 'win32':
+        return None
     try:
         with _net_urlopen(FFMPEG_VERSION_URL, timeout=15) as r:
             return r.read().decode('utf-8', 'replace').strip() or None
@@ -1706,58 +1882,6 @@ class FFmpegSetupThread(QThread):
     def stop(self):
         self._cancel = True
 
-    def _download(self, url, dst):
-        """Атомарная стриминговая загрузка через .part с прогрессом."""
-        tmp = dst + ".part"
-        try:
-            with _net_urlopen(url, timeout=60) as resp, open(tmp, 'wb') as out_f:
-                total = resp.getheader('Content-Length')
-                total = int(total) if total and total.isdigit() else None
-                downloaded = 0
-                while True:
-                    if self._cancel:
-                        raise RuntimeError("Отменено пользователем")
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    out_f.write(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        self.progress.emit(int(downloaded * 100 / total))
-            if total is not None and downloaded < total:
-                raise RuntimeError(f"Неполная загрузка: {downloaded}/{total} байт")
-            os.replace(tmp, dst)
-        finally:
-            if os.path.exists(tmp):
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-
-    def _extract_new(self, zip_path, new_dir):
-        """Распаковывает архив и собирает new_dir/bin с бинарниками ffmpeg."""
-        extract = new_dir + ".extract"
-        _rmtree_retry(new_dir)
-        _rmtree_retry(extract)
-        os.makedirs(extract, exist_ok=True)
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(extract)
-        inner_bin = None
-        for root, _dirs, files in os.walk(extract):
-            if os.path.basename(root) == "bin" and any(
-                    f.lower().startswith("ffmpeg") for f in files):
-                inner_bin = root
-                break
-        if not inner_bin:
-            _rmtree_retry(extract)
-            raise RuntimeError("В архиве не найдена папка bin с ffmpeg")
-        new_bin = os.path.join(new_dir, "bin")
-        os.makedirs(new_bin, exist_ok=True)
-        for fname in os.listdir(inner_bin):
-            shutil.copy2(os.path.join(inner_bin, fname), os.path.join(new_bin, fname))
-        _rmtree_retry(extract)
-        return new_bin
-
     @staticmethod
     def _swap(new_dir, target_dir):
         """Атомарно заменяет target_dir на new_dir с бэкапом .old и откатом."""
@@ -1775,21 +1899,20 @@ class FFmpegSetupThread(QThread):
         _rmtree_retry(backup)
 
     def run(self):
-        app_dir = APP_DIR
+        app_dir = DATA_DIR
         target = os.path.join(app_dir, "ffmpeg")
         target_bin = os.path.join(target, "bin")
-        zip_path = os.path.join(app_dir, "ffmpeg.zip")
         new_dir = os.path.join(app_dir, "ffmpeg.new")
         # Чистим «хвосты» от прерванных установок
         for n in ("ffmpeg.new", "ffmpeg.new.extract", "ffmpeg.old"):
             _rmtree_retry(os.path.join(app_dir, n), attempts=2)
-        for n in ("ffmpeg.zip", "ffmpeg.zip.part"):
-            p = os.path.join(app_dir, n)
-            if os.path.isfile(p):
+        for n in os.listdir(app_dir):
+            if n.startswith(("ffmpeg.zip", "ffmpeg.download")) and os.path.isfile(os.path.join(app_dir, n)):
                 try:
-                    os.remove(p)
+                    os.remove(os.path.join(app_dir, n))
                 except OSError:
                     pass
+        archives = []
         try:
             cur = ffmpeg_local_version(os.path.join(target_bin, "ffmpeg" + _EXE))
             if self.mode == "update":
@@ -1802,14 +1925,37 @@ class FFmpegSetupThread(QThread):
                     self.done.emit(True, tr_fmt("Уже актуально — FFmpeg {v}.", v=cur))
                     return
 
-            self.progress.emit(tr("Скачивание FFmpeg…"))
-            self._download(FFMPEG_DOWNLOAD_URL, zip_path)
+            new_bin, last_err = None, None
+            for urls in ffmpeg_sources():          # основной источник, потом запасные
+                try:
+                    archives = []
+                    for i, url in enumerate(urls):
+                        self.progress.emit(tr("Скачивание FFmpeg…"))
+                        self.log.emit(url)
+                        path = os.path.join(app_dir, f"ffmpeg.download{i}")
+                        download_file(url, path, self.progress.emit, lambda: self._cancel)
+                        archives.append(path)
+                    self.progress.emit(tr("Распаковка…"))
+                    _rmtree_retry(new_dir)
+                    new_bin = extract_ffmpeg_binaries(archives, os.path.join(new_dir, "bin"))
+                    break
+                except Exception as e:
+                    if self._cancel:
+                        raise
+                    last_err = e
+                    self.log.emit(tr_fmt("Ошибка: {e}", e=e))
+                finally:
+                    for path in archives:
+                        if os.path.exists(path):
+                            try:
+                                os.remove(path)
+                            except OSError:
+                                pass
             if self._cancel:
                 self.done.emit(False, tr("Отменено."))
                 return
-
-            self.progress.emit(tr("Распаковка…"))
-            new_bin = self._extract_new(zip_path, new_dir)
+            if new_bin is None:
+                raise last_err or RuntimeError("FFmpeg не скачался")
             new_ver = ffmpeg_local_version(os.path.join(new_bin, "ffmpeg" + _EXE))
             if not new_ver:
                 raise RuntimeError("Скачанный ffmpeg не прошёл проверку запуска")
@@ -1828,12 +1974,6 @@ class FFmpegSetupThread(QThread):
             self.done.emit(False, str(e))
         finally:
             _rmtree_retry(new_dir, attempts=2)
-            if os.path.exists(zip_path):
-                try:
-                    os.remove(zip_path)
-                except OSError:
-                    pass
-
 
 
 class ProbeThread(QThread):
@@ -4824,8 +4964,7 @@ class VideoConverter(QMainWindow):
 
     def refresh_ffmpeg_label(self):
         text = self._ffmpeg_version_text()
-        m = re.search(r'ffmpeg version (\S+)', text)
-        short = m.group(1).split('-')[0] if m else ""
+        short = short_ffmpeg_version(text) or ""
         location = self._ffmpeg_location()
         # где лежит FFmpeg — видно сразу: встроенный, из PATH или указанный вручную
         self.ffmpeg_version_label.setText(f"FFmpeg {short}  ·  {os.path.dirname(location)}"
@@ -4896,33 +5035,28 @@ class VideoConverter(QMainWindow):
 
     # ------------------------------------------------------- Локализация ---
     def load_locales(self):
-        locales_dir = (os.path.join(RESOURCE_DIR, 'locales')
-                       if os.path.exists(os.path.join(RESOURCE_DIR, 'locales'))
-                       else os.path.join(APP_DIR, 'locales'))
-        try:
-            os.makedirs(locales_dir, exist_ok=True)
-        except Exception:
-            pass
         current = self.locale_combo.currentData()
         self.locales_map = {}
+        for folder in locale_dirs():       # свои переводы заменяют встроенные с тем же кодом
+            try:
+                names = os.listdir(folder)
+            except OSError:
+                continue
+            for fname in names:
+                if fname.lower().endswith('.json'):
+                    self.locales_map[os.path.splitext(fname)[0]] = os.path.join(folder, fname)
         self.locale_combo.blockSignals(True)
         self.locale_combo.clear()
-        try:
-            for fname in sorted(f for f in os.listdir(locales_dir) if f.lower().endswith('.json')):
-                code = os.path.splitext(fname)[0]
-                path = os.path.join(locales_dir, fname)
-                display = code
-                try:
-                    with open(path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        if isinstance(data, dict) and data.get('name'):
-                            display = f"{data.get('name')} ({code})"
-                except Exception:
-                    pass
-                self.locales_map[code] = path
-                self.locale_combo.addItem(display, code)
-        except Exception:
-            pass
+        for code in sorted(self.locales_map):
+            display = code
+            try:
+                with open(self.locales_map[code], 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and data.get('name'):
+                    display = f"{data.get('name')} ({code})"
+            except Exception:
+                pass
+            self.locale_combo.addItem(display, code)
         if current:
             idx = self.locale_combo.findData(current)
             if idx >= 0:
@@ -4930,7 +5064,12 @@ class VideoConverter(QMainWindow):
         self.locale_combo.blockSignals(False)
 
     def open_locales_folder(self):
-        open_in_os(os.path.join(APP_DIR, 'locales'))
+        folder = os.path.join(DATA_DIR, 'locales')    # сюда можно класть свои переводы
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError:
+            pass
+        open_in_os(folder)
 
     def apply_locale(self, code):
         path = self.locales_map.get(code)
@@ -6122,6 +6261,42 @@ class FFmpegWorker(QThread):
 # ============================================================================
 #  Запуск
 # ============================================================================
+def _selftest(report_path, ffmpeg_path, ffprobe_path):
+    """Проверка собранной программы (CI): находит встроенный FFmpeg, открывает
+    окно и пишет отчёт JSON. Код выхода 0 — всё в порядке."""
+    report = {"platform": QApplication.platformName(), "data_dir": DATA_DIR,
+              "ffmpeg": ffmpeg_path, "ffprobe": ffprobe_path,
+              "ffmpeg_version": ffmpeg_local_version(ffmpeg_path) if ffmpeg_path else None,
+              "ffprobe_ok": False, "window": False, "locales": 0}
+    try:
+        families = QFontDatabase.families() if PYQT_VERSION == 6 else QFontDatabase().families()
+        report["inter_font"] = "Inter" in families
+    except Exception:
+        report["inter_font"] = None
+    try:
+        r = run_hidden([ffprobe_path, "-version"], capture_output=True, text=True, timeout=20)
+        report["ffprobe_ok"] = r.returncode == 0 and "ffprobe version" in (r.stdout or "")
+    except Exception as e:
+        report["ffprobe_error"] = str(e)
+    try:
+        window = VideoConverter()
+        window.ffmpeg_path, window.ffprobe_path = ffmpeg_path or "ffmpeg", ffprobe_path or "ffprobe"
+        window.refresh_ffmpeg_label()
+        window.show()
+        for _ in range(20):
+            QApplication.processEvents()
+        report["window"] = window.isVisible()
+        report["locales"] = window.locale_combo.count()
+        window.close()
+    except Exception as e:
+        report["window_error"] = repr(e)
+    ok = bool(report["ffmpeg_version"] and report["ffprobe_ok"] and report["window"] and report["locales"] >= 7)
+    report["ok"] = ok
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    return 0 if ok else 1
+
+
 def main():
     if PYQT_VERSION == 5:
         # Чёткий интерфейс на экранах 125–200 % (в Qt6 включено по умолчанию)
@@ -6149,6 +6324,9 @@ def main():
     app.setStyleSheet(T.STYLESHEET_MAIN)
 
     ffmpeg_path, ffprobe_path = find_ffmpeg()
+    selftest = os.environ.get("CINECONVERT_SELFTEST")
+    if selftest:
+        sys.exit(_selftest(selftest, ffmpeg_path, ffprobe_path))
     if not ffmpeg_path:
         FFmpegSetupDialog().exec()
         ffmpeg_path, ffprobe_path = find_ffmpeg()

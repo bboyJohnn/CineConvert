@@ -4,12 +4,12 @@
 
 # 🎮 CINECONVERT
 
-**Portable FFmpeg-powered video converter for Windows**
+**Portable FFmpeg-powered video converter for Windows, Linux and macOS**
 
 *Insert cartridge • Press START • Convert*
 
-![Windows](https://img.shields.io/badge/PLAYER%201-Windows%2010%2F11-3CBCFC?style=flat-square)
-![Python](https://img.shields.io/badge/ENGINE-Python%20%2B%20PyQt5-F8B800?style=flat-square)
+![Platforms](https://img.shields.io/badge/PLAYERS-Windows%20%C2%B7%20Linux%20%C2%B7%20macOS-3CBCFC?style=flat-square)
+![Python](https://img.shields.io/badge/ENGINE-Python%20%2B%20PyQt6-F8B800?style=flat-square)
 ![FFmpeg](https://img.shields.io/badge/POWER--UP-FFmpeg-F83800?style=flat-square)
 ![Portable](https://img.shields.io/badge/SAVE-Portable%2C%20no%20install-58D854?style=flat-square)
 
@@ -57,7 +57,7 @@
 | 🎨 | **Live theme** | Any color (OKLCH slider + color picker), saturation, light/dark/system, a one-click theme toggle in the sidebar, animated waves in the header |
 | 🌐 | **7 languages** | en, ru, de, es, fr, zh, ar — every screen is translated; translations are plain JSON, easy to add your own |
 | ⌨ | **Shortcuts** | `Ctrl+O` open files · `Ctrl+Enter` start · `Ctrl+1…4` switch sections |
-| 🔄 | **1-click FFmpeg update** | Settings → FFmpeg: checks your version against the latest gyan.dev build and updates atomically (rolls back on failure) |
+| 🔄 | **1-click FFmpeg update** | Settings → FFmpeg: downloads a fresh build for your system (Windows — gyan.dev, Linux — BtbN, macOS — Martin Riedl's signed builds) and swaps it in atomically, rolling back on failure. The folder button shows where FFmpeg lives |
 | 💾 | **Everything auto-saves** | There is no "Save" button — every setting applies and persists instantly, including window size |
 
 ```
@@ -76,14 +76,19 @@ Audio ripping lives in the **"Audio"** section: pick a format → "Extract audio
                      (which file to download)
 ```
 
-Grab one of the two builds from [**Releases**](https://github.com/bboyJohnn/CineConvert/releases):
+Grab the build for your system from [**Releases**](https://github.com/bboyJohnn/CineConvert/releases/latest):
 
-| File | Size | Who it's for |
+| System | File | How to run |
 |---|---|---|
-| 🕹 **CineConvert-portable.zip** | ~110 MB | **Recommended.** Unzip → run `CineConvert.exe` → it just works, fully offline. FFmpeg is bundled |
-| 🪶 **CineConvert.exe** | ~37 MB | Lightweight. Downloads FFmpeg (~80 MB) by itself on first launch (internet needed once) |
+| 🪟 **Windows 10/11** | 🕹 **CineConvert-portable.zip** — recommended | Unzip → run `CineConvert.exe` → it just works, fully offline. FFmpeg is bundled |
+| 🪟 Windows (light) | 🪶 CineConvert.exe | Downloads FFmpeg by itself on first launch (internet needed once) |
+| 🐧 **Linux x86_64** | **CineConvert-linux-x86_64.tar.gz** | Extract → run `CineConvert/CineConvert`. FFmpeg and Qt libraries bundled |
+| 🍎 **macOS Apple Silicon** | **CineConvert-macos-apple-silicon.dmg** | Open → drag *CineConvert* into *Applications*. FFmpeg bundled |
+| 🍎 macOS Intel | CineConvert-macos-intel.dmg | Same as above |
 
-> Nothing to install: no Python, no libraries, no separate FFmpeg. Windows SmartScreen may warn about an unknown publisher — click "More info" → "Run anyway".
+> Nothing to install: no Python, no libraries, no separate FFmpeg.
+> **Windows** SmartScreen may warn about an unknown publisher — click "More info" → "Run anyway".
+> **macOS** blocks apps that are not notarized by Apple on first launch — System Settings → Privacy & Security → "Open Anyway" (or `xattr -dr com.apple.quarantine /Applications/CineConvert.app`).
 
 ```
 ═══════════════════════════ SCREENSHOTS ═══════════════════════════
@@ -119,7 +124,7 @@ Grab one of the two builds from [**Releases**](https://github.com/bboyJohnn/Cine
 - **Encoding engine** — quality profiles per encoder, codec↔container compatibility tables, stream-copy decisions based on `ffprobe`
 - **Workers** — FFmpeg runs in background threads, the UI never freezes, conversion is cancellable
 - **Reliable FFmpeg updates** — download via `.part` with integrity check, the new binary is test-run before an atomic folder swap with backup and rollback
-- **Config** — `config.json` next to the exe: theme, language, output folder, common render and extraction settings, window size
+- **Config** — `config.json` next to the program (portable); inside a macOS `.app` or a read-only folder it goes to the user folder (`~/Library/Application Support/CineConvert`, `~/.local/share/CineConvert`, `%APPDATA%\CineConvert`): theme, language, output folder, common render and extraction settings, window size
 - **Locales** — `locales/*.json`: key = widget objectName or item text; any file with a `"name"` field shows up in the language list automatically
 
 ```
@@ -131,14 +136,19 @@ Grab one of the two builds from [**Releases**](https://github.com/bboyJohnn/Cine
 # Player 1 has joined
 git clone https://github.com/bboyJohnn/CineConvert.git
 cd CineConvert
-pip install PyQt5 pyinstaller pillow
+pip install PyQt6 pyinstaller pillow
 
 # Run from source (FFmpeg auto-downloads on first launch)
 python CineConvert.py
 
-# Build the exe + portable zip (output goes to release/)
-python build_release.py
+# Build for the current OS with FFmpeg inside (output goes to release/):
+#   Windows → CineConvert.exe + CineConvert-portable.zip
+#   Linux   → CineConvert-linux-x86_64.tar.gz
+#   macOS   → CineConvert-macos-<arch>.dmg
+python build_release.py --selftest
 ```
+
+All four builds are made by GitHub Actions (`.github/workflows/release.yml`): every pull request is built and self-tested on Windows, Linux and macOS; *Actions → Build & Release → Run workflow* (or pushing a `v*` tag) publishes a release.
 
 ```
 ═══════════════════════════ CONTINUE? ═══════════════════════════
@@ -146,7 +156,7 @@ python build_release.py
 
 - 📁 **`old/`** — the previous version of the app (single screen, old design). Kept for history
 - 🐛 **Found a bug?** — open an [Issue](https://github.com/bboyJohnn/CineConvert/issues) with the log from the "Logs" tab
-- 🧡 Built on [FFmpeg](https://ffmpeg.org/) ([gyan.dev](https://www.gyan.dev/ffmpeg/builds/) builds) and [PyQt5](https://pypi.org/project/PyQt5/); font [Inter](https://github.com/rsms/inter) (OFL), icons [Lucide](https://lucide.dev) (ISC); quality presets inspired by [HandBrake](https://handbrake.fr/)
+- 🧡 Built on [FFmpeg](https://ffmpeg.org/) (builds by [gyan.dev](https://www.gyan.dev/ffmpeg/builds/), [BtbN](https://github.com/BtbN/FFmpeg-Builds) and [Martin Riedl](https://ffmpeg.martin-riedl.de/)) and [PyQt6](https://pypi.org/project/PyQt6/); font [Inter](https://github.com/rsms/inter) (OFL), icons [Lucide](https://lucide.dev) (ISC); quality presets inspired by [HandBrake](https://handbrake.fr/)
 
 <div align="center">
 
