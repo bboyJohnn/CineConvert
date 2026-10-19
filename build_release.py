@@ -178,7 +178,16 @@ def build_macos():
     # после правки Info.plist — заново подписать (ad-hoc): без подписи arm64 не запустится
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", app], check=True)
     fresh_release_dir()
-    label = "apple-silicon" if arch_name() == "arm64" else "intel"
+    # имя — по архитектуре, под которую реально собрана программа (а не по машине сборки)
+    archs = subprocess.run(["lipo", "-archs", app_executable(app)], capture_output=True,
+                           text=True, check=True).stdout.split()
+    print(">>> Архитектура:", " ".join(archs))
+    if archs == ["arm64"]:
+        label = "apple-silicon"
+    elif archs == ["x86_64"]:
+        label = "intel"
+    else:
+        label = "universal"
     dmg = os.path.join(RELEASE, f"{NAME}-macos-{label}.dmg")
     with tempfile.TemporaryDirectory() as stage:
         shutil.copytree(app, os.path.join(stage, NAME + ".app"), symlinks=True)
