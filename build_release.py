@@ -210,6 +210,9 @@ def selftest(built):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):     # консоль Windows (cp1252) не печатает кириллицу
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     fetch_ffmpeg()
     if IS_WIN:
         built = build_windows()
